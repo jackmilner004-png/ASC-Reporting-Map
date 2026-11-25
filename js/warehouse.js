@@ -421,8 +421,7 @@ const benchPairs = Math.ceil(CV.benchesPerChute / 2);                      // be
 const benchOff = edgeOff + chuteRun + 0.5 + 0.9;                          // loop centre → first bench pair centre
 const takeOff = benchOff + (benchPairs - 1) * 1.9 + 0.9 + 1.2 + 0.35;
 const turnR = 2.5;
-const combW = 3 + CV.combSpurs * 2.0;
-const convW = 1 + 2 * turnR + CV.inclineLength + loopR + loopLen + loopR + 2 + combW;
+const convW = 1 + 2 * turnR + CV.inclineLength + loopR + loopLen + loopR + 3;
 
 const inLane = 1.25, inSlot = 0.88, inApron = 4.5;            // inbound cage lanes run east from the west wall
 const dsLane = 1.5, dsSlot = 1.35, dsApron = 5;               // despatch pallet lanes, same direction
@@ -536,18 +535,21 @@ function buildConveyor() {
     }
     if (totes) for (let t = Math.min(xa, xb) + 0.5; t < Math.max(xa, xb) - 0.5; t += 0.8 + R() * 2.5) { const [px, pz] = ry ? [zz, t] : [t, zz]; put(z, "toteLow", { colour: pick(TOTES) }, px, 0.75, pz, ry ? 0 : PI / 2); }
   };
-  rollerRun(tx0, tx1, zc + takeOff, 0, true);
+  /* Tote out (Jack, 25 Nov): sits in the south-west corner of the zone, facing despatch.
+     Flow: north takeaway runs east, drops down the east end, the south takeaway runs
+     west to a manifold, and spurs run west towards despatch with a pallet at each end. */
+  const zT = zc + takeOff, spurLen = 5, mx = x00 + 1 + 1.3 + spurLen + 0.35;
+  const pitch = Math.min(2.0, (takeOff - 1.6) / Math.max(1, CV.combSpurs));
   rollerRun(tx0, tx1, zc - takeOff, 0, true);
-  rollerRun(zc - takeOff + 0.35, zc + takeOff - 0.35, tx1 + 0.35, PI / 2, true);
-  const cx0 = tx1 + 0.7, spurLen = 6;
-  rollerRun(cx0, cx0 + combW - 1, zc, 0, true);
+  rollerRun(zc - takeOff + 0.35, zT - 0.35, tx1 + 0.35, PI / 2, true);
+  rollerRun(mx - 0.35, tx1 + 0.7, zT, 0, true);
+  rollerRun(zT - 0.35, zT - 0.35 - pitch * (CV.combSpurs - 0.5), mx, PI / 2, true);
   let pallets = 0;
   for (let s = 0; s < CV.combSpurs; s++) {
-    const sx = cx0 + 0.8 + s * 2.0;
-    rollerRun(zc + 0.35, zc + 0.35 + spurLen, sx, PI / 2, true);     // spurs run south, towards despatch side
-    for (let k = 0; k < 2; k++) if (R() < 0.8) { palletLoad(z, sx + 1.0, 0, zc + 2 + k * 2.2, PI / 2, "tote", 1.0); pallets++; }
+    const sz = zT - 0.35 - pitch * (s + 0.5);
+    rollerRun(mx - 0.35, mx - 0.35 - spurLen, sz, 0, true);
+    if (R() < 0.85) { palletLoad(z, mx - 0.35 - spurLen - 0.75, 0, sz, 0, "tote", 1.4); pallets++; }
   }
-  for (let k = 0; k < CV.combSpurs; k++) if (R() < 0.75) { palletLoad(z, cx0 + 1.0 + k * 2.0, 0, zc - 2.2, 0, "tote", 1.2); pallets++; }
   const loopLength = Math.round(2 * loopLen + 2 * PI * loopR);
   return [["Chutes", chutes], ["Pack benches", benches], ["Sorter loop", loopLength + " m"], ["Sorter height", Hs + " m"], ["Induction cages", cages], ["Tote pallets", pallets]];
 }
@@ -635,7 +637,7 @@ function buildStorage() {
 const BUILD = { inbound: buildInbound, conveyor: buildConveyor, manual: buildManual, hanging: buildHanging, storage: buildStorage, despatch: buildDespatch };
 const ZONE_TEXT = {
   inbound: "All inbound arrives in roll cages through the inbound doors on the west wall. Hover a cage to see where it came from, when it arrived and what is in it.",
-  conveyor: `Cages are tipped onto a low induction belt, which turns and climbs an incline to a loop sorter at ${CV.sorterHeight} m. ${CV.chutes} chutes drop from both sides of the loop to ${CV.chutes * CV.benchesPerChute} pack benches. Packed totes leave on floor roller lines to the palletising spurs.`,
+  conveyor: `Cages are tipped onto a low induction belt, which turns and climbs an incline to a loop sorter at ${CV.sorterHeight} m. ${CV.chutes} chutes drop from both sides of the loop to ${CV.chutes * CV.benchesPerChute} pack benches. Packed totes leave on floor roller lines to the tote-out spurs in the south-west corner, which face despatch.`,
   manual: "Benches for returns that cannot go down the conveyor: oversized, damaged or needing a closer check.",
   hanging: "Garment rails along the back wall for hanging processing, with dense hanging storage in the north-east corner.",
   storage: "Pallet racking along the south wall.",
