@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ASC Reporting Map</title>
+<meta name="description" content="3D layout of the ASC returns warehouse: inbound, conveyor, manual, hanging, storage and despatch.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <h1>ASC Reporting Map</h1>
+      <p id="subtitle">Single-floor layout, v0.1. Counts come from <code>js/layout-config.js</code>.</p>
+    </div>
+    <nav class="sections" id="sections" aria-label="Sections"></nav>
+  </header>
+  <main class="layout">
+    <section class="stage" aria-label="3D warehouse view">
+      <div id="viewport"></div>
+      <div id="labels" aria-hidden="true"></div>
+      <div class="toolbar">
+        <button class="btn" id="btn-labels" aria-pressed="true">Labels</button>
+        <button class="btn" id="btn-reset">Reset view</button>
+      </div>
+      <div class="hint">Drag to orbit · scroll or pinch to zoom · right-drag to pan · keys 0–6 switch section</div>
+      <div class="loading" id="loading">Building the warehouse…</div>
+    </section>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="js/asc-elements.js"></script>
+<script src="js/layout-config.js"></script>
+<script src="js/warehouse.js"></script>
+</body>
+</html>
