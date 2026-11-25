@@ -756,6 +756,17 @@ function flyTo(b, instant) {
 let current = "all", greyCol = new T.Color(), shell;
 function setFocus(id, instant) {
   current = id;
+  recolour();
+  hideTip();
+  flyTo(id === "all" ? ALL : Z[id].box, instant);
+  document.querySelectorAll("#sections button").forEach(b => { const on = b.dataset.id === id; b.setAttribute("aria-pressed", String(on)); if (on && !instant) b.scrollIntoView({ block: "nearest", inline: "nearest" }); });
+  renderPanel();
+  try { history.replaceState(null, "", id === "all" ? location.pathname + location.search : "#" + id); } catch (e) {}
+  invalidate();
+}
+/* Grey out every zone except the focused one (colour only, keeps the camera where it is). */
+function recolour() {
+  const id = current;
   for (const z of ZONES) {
     const dim = id !== "all" && z.id !== id, on = z.id === id;
     for (const r of zoneMats[z.id]) {
@@ -767,11 +778,6 @@ function setFocus(id, instant) {
     z.lines.forEach(l => l.material.opacity = dim ? 0.15 : 1);
     z.label.classList.toggle("dim", dim);
   }
-  hideTip();
-  flyTo(id === "all" ? ALL : Z[id].box, instant);
-  document.querySelectorAll("#sections button").forEach(b => { const on = b.dataset.id === id; b.setAttribute("aria-pressed", String(on)); if (on && !instant) b.scrollIntoView({ block: "nearest", inline: "nearest" }); });
-  renderPanel();
-  try { history.replaceState(null, "", id === "all" ? location.pathname + location.search : "#" + id); } catch (e) {}
   invalidate();
 }
 
@@ -994,7 +1000,11 @@ function applyTheme() {
   scene.background = new T.Color(css("--scene"));
   greyCol.set(css("--dim"));
   if (shell) { shell.floorMat.color.set(css("--floor")); shell.wallMat.color.set(css("--wall")); }
-  if (current) setFocus(current, true);
+  if (shell) recolour();
+  const dark = isDark();
+  const b = document.getElementById("btn-theme");
+  b.textContent = dark ? "Light mode" : "Dark mode"; b.setAttribute("aria-label", dark ? "Switch to light mode" : "Switch to dark mode");
+  invalidate();
 }
 function resize() {
   const w = viewport.clientWidth, h = viewport.clientHeight;
@@ -1034,7 +1044,18 @@ requestAnimationFrame(() => {
   });
 });
 new ResizeObserver(() => { resize(); }).observe(viewport);
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+/* Light / dark toggle. Follows the system until the viewer picks one; the pick is remembered on this device. */
+const darkMQ = matchMedia("(prefers-color-scheme: dark)");
+const isDark = () => { const t = document.documentElement.dataset.theme; return t ? t === "dark" : darkMQ.matches; };
+try { const saved = localStorage.getItem("asc-map-theme"); if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved; } catch (e) {}
+darkMQ.addEventListener("change", applyTheme);
+document.getElementById("btn-theme").addEventListener("click", () => {
+  const next = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("asc-map-theme", next); } catch (e) {}
+  applyTheme();
+});
+applyTheme();
 document.getElementById("btn-reset").addEventListener("click", () => flyTo(current === "all" ? ALL : Z[current].box));
 document.getElementById("btn-labels").addEventListener("click", e => {
   const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
