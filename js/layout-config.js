@@ -4,9 +4,12 @@
    are worked out from these, so changing a count re-flows the floor.
    Units: metres unless a name says otherwise.
    `guess: true` marks placements nobody has confirmed yet (shown in the UI).
-   Arrangement follows Jack's layout video (Media1.mp4): doors on one long
-   wall, bulk pallets in front of them, the loop sorter along the back wall,
-   racking along the far end wall.
+
+   Arrangement follows Jack's remap (25 Nov):
+     west wall: every bay door. Inbound to the north, despatch to the south.
+     middle: hanging processing along the back wall, conveyor in the centre,
+             racking storage along the south wall.
+     east: hanging storage to the north, manual processing below it.
    ========================================================================= */
 window.ASC_LAYOUT = {
   site: { name: "ASC returns centre", wallHeight: 8 },
@@ -19,8 +22,7 @@ window.ASC_LAYOUT = {
 
   inbound: {
     guess: false,
-    bulkRows: 7, bulkCols: 16, fill: 0.85,   // floor-stacked pallets in the yellow-marked bulk area
-    cages: 12                                // roll cages just off the trailers
+    lanes: 6, cagesPerLane: 10   // all inbound arrives in roll cages; cages come from js/sample-data.js
   },
 
   conveyor: {
@@ -34,29 +36,31 @@ window.ASC_LAYOUT = {
     inclineLength: 10,
     beltWidth: 0.6,
     sectionLength: 4,       // length of each straight conveyor module
-    combSpurs: 4            // roller spurs where packed totes are palletised
+    combSpurs: 4,           // roller spurs where packed totes are palletised
+    animateBelts: false     // true = moving belts, but the page then redraws every frame
   },
 
   manual: {
-    guess: true,            // GUESS: not in the video
+    guess: false,
     rows: 4, benchesPerRow: 6
   },
 
   hanging: {
-    guess: true,            // GUESS: not in the video
-    rails: 6, railLength: 27, fill: 0.7,
-    benches: 4
+    guess: false,
+    rails: 4, fill: 0.7,            // processing rails run the width of the middle section
+    benches: 8,
+    storageRails: 10, storageRailLength: 18, storageFill: 0.85
   },
 
   storage: {
-    guess: false,           // racking along the far end wall, per the video. Sizes are estimates.
-    rackRows: 4, baysPerRow: 15, beamLevels: [1.8, 3.6, 5.4], fill: 0.75
+    guess: false,           // racking along the south wall. Bays fill the section width.
+    rackRows: 2, beamLevels: [1.8, 3.6, 5.4], fill: 0.75
   },
 
   despatch: {
     guess: false,
     lines: 18,
-    cagesPerLine: 7,        // capacity of each lane
-    fill: 0.65              // share of lane slots shown occupied
+    palletsPerLine: 7,      // capacity of each lane
+    totesPerPallet: 24      // pallets come from js/sample-data.js
   }
 };
