@@ -757,6 +757,7 @@ let current = "all", greyCol = new T.Color(), shell;
 function setFocus(id, instant) {
   current = id;
   recolour();
+  dispatchEvent(new CustomEvent("asc-map-focus", { detail: id }));
   hideTip();
   flyTo(id === "all" ? ALL : Z[id].box, instant);
   document.querySelectorAll("#sections button").forEach(b => { const on = b.dataset.id === id; b.setAttribute("aria-pressed", String(on)); if (on && !instant) b.scrollIntoView({ block: "nearest", inline: "nearest" }); });
@@ -1001,6 +1002,7 @@ function applyTheme() {
   greyCol.set(css("--dim"));
   if (shell) { shell.floorMat.color.set(css("--floor")); shell.wallMat.color.set(css("--wall")); }
   if (shell) recolour();
+  dispatchEvent(new CustomEvent("asc-map-theme"));
   const dark = isDark();
   const b = document.getElementById("btn-theme");
   b.textContent = dark ? "Light mode" : "Dark mode"; b.setAttribute("aria-label", dark ? "Switch to light mode" : "Switch to dark mode");
@@ -1021,6 +1023,8 @@ requestAnimationFrame(() => {
   const start = location.hash.slice(1);
   setFocus(Z[start] ? start : "all", true);
   document.getElementById("loading").hidden = true;
+  Object.assign(window.ASC_MAP, { ready: true, current: () => current });
+  dispatchEvent(new CustomEvent("asc-map-ready"));
   const animate = CV.animateBelts && !reduceMotion && ticks.length;
   let last = performance.now();
   renderer.setAnimationLoop(now => {
@@ -1067,5 +1071,5 @@ addEventListener("keydown", e => {
   if (e.key === "0") setFocus("all");
   const z = ZONES.find(z => z.key === e.key); if (z) setFocus(z.id);
 });
-window.ASC_MAP = { setFocus, zones: ZONES, rects, scene, camera, controls, renderer, hoverables, invalidate };
+window.ASC_MAP = { setFocus, zones: ZONES, rects, scene, camera, controls, renderer, hoverables, invalidate, world, sun, all: ALL, flyTo, size: { BW, BD }, doorZ, doorsIn, doors: D, css };
 })();
