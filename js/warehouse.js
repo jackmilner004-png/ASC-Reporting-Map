@@ -281,17 +281,26 @@ function put(zone, key, p, x, y, z, ry = 0) {
   const t = template(key, p), k = zone + "|" + t.id;
   if (!buckets.has(k)) buckets.set(k, { zone, t, list: [] });
   _q.setFromEuler(_e.set(0, ry, 0));
-  buckets.get(k).list.push(new T.Matrix4().compose(new T.Vector3(x, y, z), _q, _s));
+  const list = buckets.get(k).list;
+  list.push(new T.Matrix4().compose(new T.Vector3(x, y, z), _q, _s));
+  if (collecting) collecting.push({ k, i: list.length - 1 });
   counts[zone][key] = (counts[zone][key] || 0) + 1;
 }
+/* Group the instances placed between beginItem() and endItem() so one item
+   (a cage and everything in it) can be lifted as a unit later. */
+let collecting = null;
+const beginItem = () => { collecting = []; };
+const endItem = () => { const c = collecting; collecting = null; return c; };
 function addStatic(zone, mesh) {
   mesh.material = zoneMat(zone, mesh.material);
   mesh.receiveShadow = true;
   zoneGroups[zone].add(mesh);
 }
 function flushInstances() {
-  for (const { zone, t, list } of buckets.values()) for (const part of t.parts) {
+  for (const b of buckets.values()) for (const part of b.t.parts) {
+    const { zone, t, list } = b;
     const im = new T.InstancedMesh(part.geo, zoneMat(zone, part.mat), list.length);
+    (b.meshes = b.meshes || []).push(im);
     im.userData.tid = t.id.slice(0, 40);
     list.forEach((m, i) => im.setMatrixAt(i, m));
     im.castShadow = im.receiveShadow = true;
@@ -388,7 +397,8 @@ function railRun(zone, x0, len, z, fill) {
 
 /* Things the pointer can hover: { kind, rec, zone, x, y, z, w, h, d } in building coordinates. */
 const hoverables = [];
-const DATA = window.ASC_DATA || { inboundCages: [], despatchPallets: [] };
+const DATA = Object.assign({ inboundCages: [], despatchPallets: [], benchOutput: [], routes: [] }, window.ASC_DATA || {});
+const BENCH_DATA = Object.fromEntries(DATA.benchOutput.map(b => [String(b.bench), b]));
 
 /* =========================================================================
    Layout (Jack's remap, 25 Nov):
@@ -407,8 +417,9 @@ const perSide = [Math.ceil(CV.chutes / 2), Math.floor(CV.chutes / 2)];
 const loopR = 1.3, loopLen = perSide[0] * CV.chuteSpacing + 2;
 const chuteRun = 2.4;
 const edgeOff = loopR + CV.beltWidth / 2 + 0.06;
-const benchOff = edgeOff + chuteRun + 0.5 + 0.4;
-const takeOff = benchOff + 0.4 + 1.4 + 0.35;
+const benchPairs = Math.ceil(CV.benchesPerChute / 2);                      // benches stand back to back in pairs
+const benchOff = edgeOff + chuteRun + 0.5 + 0.9;                          // loop centre → first bench pair centre
+const takeOff = benchOff + (benchPairs - 1) * 1.9 + 0.9 + 1.2 + 0.35;
 const turnR = 2.5;
 const combW = 3 + CV.combSpurs * 2.0;
 const convW = 1 + 2 * turnR + CV.inclineLength + loopR + loopLen + loopR + 2 + combW;
@@ -470,8 +481,9 @@ function buildInbound() {
   cages.forEach((rec, i) => {
     const lane = Math.floor(i / IN.cagesPerLane), k = i % IN.cagesPerLane;
     const x = laneX0 + 0.15 + (k + 0.5) * inSlot, zz = lz0 + (lane + 0.5) * inLane;
+    beginItem();
     loadedCage(z, x, zz, -PI / 2, 0.35 + R() * 0.65);           // gates face the doors
-    hoverables.push({ kind: "cage", rec, zone: z, x, y: 0.85, z: zz, w: 0.86, h: 1.72, d: 0.76 });
+    hoverables.push({ kind: "cage", rec, zone: z, x, y: 0.85, z: zz, w: 0.86, h: 1.72, d: 0.76, parts: endItem(), lift: true });
   });
   return [["Bay doors", doorsIn], ["Cages in", cages.length], ["Cage spaces", cap], ["Lanes", IN.lanes]];
 }
@@ -497,13 +509,20 @@ function buildConveyor() {
   curve(lx0, zc, loopR, PI / 2, PI, Hs);
   curve(lx1, zc, loopR, -PI / 2, PI, Hs);
   for (const zz of [zSo, zNo]) for (let x = lx0 + 0.6; x < lx1 - 0.6; x += 1.4 + R() * 2.4) loose(z, pick(["parcelS", "bagS", "bagM", "parcelS"]), x, Hs, zz, (R() - 0.5) * 0.3);
-  const nb = CV.benchesPerChute, trayW = nb * 1.9 - 0.1;
+  const nb = CV.benchesPerChute, trayW = 1.0;
   let chutes = 0, benches = 0;
   [1, -1].forEach((side, si) => {
     for (let k = 0; k < perSide[si]; k++) {
       const x = lx0 + 1 + (k + 0.5) * CV.chuteSpacing, ry = side > 0 ? 0 : PI, edge = zc + side * edgeOff;
       put(z, "chute", { L: chuteRun, h1: Hs - 0.02, h2: 0.86, trayW }, x, 0, edge, ry); chutes++;
-      for (let j = 0; j < nb; j++) { dressedBench(z, x + (j - (nb - 1) / 2) * 1.9, zc + side * benchOff, ry, "pack"); benches++; }
+      for (let j = 0; j < nb; j++) {
+        // back to back along the chute line: bench A faces west, bench B east, operators either side
+        const face = j % 2 ? 1 : -1, bxp = x + face * 0.42, bzp = zc + side * (benchOff + Math.floor(j / 2) * 1.9);
+        const id = (si * perSide[0] + k + 1) + String.fromCharCode(65 + j);
+        dressedBench(z, bxp, bzp, face * PI / 2, "pack"); benches++;
+        const rec = BENCH_DATA[id] || { bench: id, missing: true };
+        hoverables.push({ kind: "bench", rec, zone: z, x: bxp, y: 0.8, z: bzp, w: 0.86, h: 1.6, d: 1.86, lift: false });
+      }
       if (R() < 0.7) loose(z, pick(["parcelS", "bagS", "bagM"]), x + (R() - 0.5) * trayW * 0.6, 0.875, edge + side * (chuteRun + 0.25), R() * PI);
     }
   });
@@ -553,8 +572,9 @@ function buildDespatch() {
     const li = (rec.lane | 0) - 1;
     if (li < 0 || li >= DS.lines || used[li] >= DS.palletsPerLine) continue;
     const k = used[li]++, x = laneX0 + 0.15 + (k + 0.5) * dsSlot, zz = lz0 + (li + 0.5) * dsLane;
+    beginItem();
     const h = totePallet(z, x, zz, 0, TOTES.includes(rec.toteColour) ? rec.toteColour : "black", Math.min(rec.totes || DS.totesPerPallet, 32));
-    hoverables.push({ kind: "pallet", rec, zone: z, x, y: h / 2, z: zz, w: 1.26, h, d: 1.06 });
+    hoverables.push({ kind: "pallet", rec, zone: z, x, y: h / 2, z: zz, w: 1.26, h, d: 1.06, parts: endItem(), lift: true });
     shown++;
   }
   const totes = DATA.despatchPallets.reduce((a, p) => a + (p.totes || 0), 0);
@@ -647,7 +667,7 @@ let dirty = true;
 const invalidate = () => { dirty = true; };
 controls.addEventListener("change", invalidate);
 
-let hitMesh = null, hoverBox = null;
+let hitMesh = null, hoverBox = null, selBox = null;
 function build() {
   const stats = {};
   for (const z of ZONES) stats[z.id] = BUILD[z.id]();
@@ -700,6 +720,8 @@ function build() {
     hitMesh.updateMatrixWorld(true);
     hoverBox = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(1, 1, 1)), new T.LineBasicMaterial({ color: 0xf2b705, depthTest: false, transparent: true }));
     hoverBox.renderOrder = 10; hoverBox.visible = false; world.add(hoverBox);
+    selBox = new T.LineSegments(hoverBox.geometry, new T.LineBasicMaterial({ color: 0xf2b705, depthTest: false, transparent: true }));
+    selBox.renderOrder = 11; selBox.visible = false; world.add(selBox);
   }
   const e = Math.max(BW, BD) * 0.62;
   Object.assign(sun.shadow.camera, { left: -e, right: e, top: e, bottom: -e, near: 1, far: 400 }); sun.shadow.camera.updateProjectionMatrix();
@@ -775,10 +797,27 @@ function renderPanel() {
   const z = Z[current], cfg = C[current] || {};
   panel.innerHTML = `<div><div class="kicker"><span class="swatch" style="background:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[current]}</p></div>
     <div><h3>In this section</h3><div class="stats">${z.stats.map(([l, v]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("")}</div></div>
+    ${current === "conveyor" ? convOutputHTML() : ""}
     ${cfg.guess ? guessNote : ""}
-    ${current === "inbound" || current === "despatch" ? dataNote : `<p class="notes">Area about ${Math.round(z.box.x1 - z.box.x0)} × ${Math.round(z.box.z1 - z.box.z0)} m. Fill levels are illustrative until live data is connected.</p>`}
+    ${current === "inbound" || current === "despatch" || current === "conveyor" ? dataNote : `<p class="notes">Area about ${Math.round(z.box.x1 - z.box.x0)} × ${Math.round(z.box.z1 - z.box.z0)} m. Fill levels are illustrative until live data is connected.</p>`}
     <button class="btn" id="back-all">Back to view all</button>`;
   panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
+}
+/* Conveyor day output, summed from the bench records. */
+function convOutputHTML() {
+  const g = { A: 0, B: 0, C: 0 }, r = {};
+  let open = 0;
+  for (const b of DATA.benchOutput) {
+    for (const k in g) g[k] += +(b.grades || {})[k] || 0;
+    for (const [n, v] of Object.entries(b.routes || {})) r[n] = (r[n] || 0) + (+v || 0);
+    if (b.status && b.status !== "Closed") open++;
+  }
+  const total = sum(g);
+  if (!DATA.benchOutput.length) return `<p class="notes">No bench output data loaded.</p>`;
+  return `<div><h3>Today's output</h3><div class="hero"><b>${n0(total)}</b><span>units packed${DATA.asOf ? " by " + esc(fmtTime(DATA.asOf).split(", ").pop()) : ""} · ${open} of ${DATA.benchOutput.length} benches open</span></div></div>
+    <div><h3>By grade</h3>${gradeBlock(g)}</div>
+    <div><h3>By despatch route</h3>${routeBlock(r)}</div>
+    <p class="notes">Click a pack bench to see its own output.</p>`;
 }
 function makeLabels() {
   for (const z of ZONES) {
@@ -802,59 +841,152 @@ function placeLabels() {
   }
 }
 
-/* ---------- Hover tooltips ---------- */
-const ray = new T.Raycaster(), ndc = new T.Vector2();
-let hovered = -1, pinned = false;
-function tipHTML(h) {
-  const r = h.rec, skus = Array.isArray(r.skus) ? r.skus : [];
-  const units = skus.reduce((a, s) => a + (s.qty || 0), 0);
-  const rows = h.kind === "cage"
-    ? [["From", r.origin], ["Delivered", fmtTime(r.deliveredAt)], ["Trailer", r.trailer], ["Door", r.door != null ? "D" + r.door : null]]
-    : [["Lane", r.lane], ["Going to", r.destination], ["Built", fmtTime(r.builtAt)], ["Packed at", r.packedAt], ["Totes", r.totes]];
-  const show = skus.slice(0, 8);
-  return `<div class="tip-h"><span class="tip-k">${h.kind === "cage" ? "Inbound cage" : "Despatch pallet"}</span><b>${esc(r.id || "No ID")}</b></div>
-    <dl>${rows.filter(([, v]) => v != null && v !== "").map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
-    <div class="tip-s">${skus.length} SKU${skus.length === 1 ? "" : "s"} · ${units} units</div>
-    <table>${show.map(s => `<tr><td class="sku">${esc(s.sku)}</td><td>${esc(s.description || "")}</td><td class="q">×${esc(s.qty)}</td></tr>`).join("")}</table>
+/* ---------- Hover and click on cages, pallets and benches ----------
+   Hover: the item lifts slightly and a compact card follows the pointer.
+   Click: the item pops out (lifts higher) and the full card opens beside it. */
+const ray = new T.Raycaster(), ndc = new T.Vector2(), card = document.getElementById("card");
+const LIFT_HOVER = 0.25, LIFT_OPEN = 1.1;
+let hovered = -1, selected = -1;
+const lifts = new Map();                       // hoverable index -> { cur, target }
+const _m4 = new T.Matrix4();
+function setLift(i, target) {
+  const h = hoverables[i]; if (!h || !h.lift || !h.parts) return;
+  const s = lifts.get(i) || { cur: 0, target: 0 }; s.target = target; lifts.set(i, s); invalidate();
+}
+function applyLift(i, y) {
+  for (const { k, i: idx } of hoverables[i].parts) {
+    const b = buckets.get(k); _m4.copy(b.list[idx]); _m4.elements[13] += y;
+    for (const im of b.meshes) { im.setMatrixAt(idx, _m4); im.instanceMatrix.needsUpdate = true; }
+  }
+}
+function stepLifts(dt) {
+  let moving = false;
+  for (const [i, s] of lifts) {
+    const d = s.target - s.cur;
+    s.cur = Math.abs(d) < 0.003 || reduceMotion ? s.target : s.cur + d * Math.min(1, dt * 12);
+    applyLift(i, s.cur);
+    if (s.cur !== s.target) moving = true; else if (s.target === 0) lifts.delete(i);
+  }
+  return moving;
+}
+const liftOf = i => (lifts.get(i) || { cur: 0 }).cur;
+function frameBox(box, i, pad) {
+  const h = hoverables[i];
+  box.position.set(h.x, h.y + liftOf(i), h.z); box.scale.set(h.w + pad, h.h + pad, h.d + pad); box.visible = true;
+}
+
+const sum = o => Object.values(o || {}).reduce((a, b) => a + (+b || 0), 0);
+const n0 = v => Number(v || 0).toLocaleString("en-GB");
+const pct = (v, t) => t ? Math.round(100 * v / t) + "%" : "–";
+/* Grade split: thin segmented bar + one row per grade with swatch, units and share. */
+function gradeBlock(g) {
+  const total = sum(g), keys = ["A", "B", "C"];
+  return `<div class="seg-bar" role="img" aria-label="Grade split: ${keys.map(k => `${k} ${pct(g[k], total)}`).join(", ")}">${keys.map(k => g[k] ? `<span class="g${k}" style="flex:${g[k]}"></span>` : "").join("")}</div>
+    <ul class="rows">${keys.map(k => `<li><span class="sw g${k}"></span><span>Grade ${k}</span><b>${n0(g[k])}</b><span class="pc">${pct(g[k], total)}</span></li>`).join("")}</ul>`;
+}
+/* Routes: ranked horizontal bars, one hue, largest first, figures beside each. */
+function routeBlock(r) {
+  const names = DATA.routes.length ? DATA.routes : Object.keys(r || {});
+  const rows = names.map(n => [n, +(r || {})[n] || 0]).sort((a, b) => b[1] - a[1]), max = Math.max(1, ...rows.map(x => x[1])), total = sum(r);
+  return `<ul class="bars">${rows.map(([n, v]) => `<li title="${esc(n)}: ${n0(v)} units (${pct(v, total)})"><span class="bn">${esc(n)}</span><span class="bt"><span style="width:${(100 * v / max).toFixed(1)}%"></span></span><b>${n0(v)}</b></li>`).join("")}</ul>`;
+}
+function skuTable(skus, limit) {
+  const show = limit ? skus.slice(0, limit) : skus;
+  return `<table class="skus">${show.map(s => `<tr><td class="sku">${esc(s.sku)}</td><td>${esc(s.description || "")}</td><td class="q">×${esc(s.qty)}</td></tr>`).join("")}</table>
     ${skus.length > show.length ? `<div class="tip-more">+ ${skus.length - show.length} more SKUs</div>` : ""}`;
 }
-function hideTip() { if (hovered < 0 && tip.hidden) return; hovered = -1; pinned = false; tip.hidden = true; if (hoverBox) hoverBox.visible = false; renderer.domElement.style.cursor = ""; invalidate(); }
+const KIND = { cage: "Inbound cage", pallet: "Despatch pallet", bench: "Pack bench" };
+function head(h, closable) {
+  const r = h.rec, id = h.kind === "bench" ? "Bench " + r.bench : (r.id || "No ID");
+  return `<div class="tip-h"><span class="tip-k">${KIND[h.kind]}</span><b>${esc(id)}</b>${closable ? `<button class="x" aria-label="Close" data-close>×</button>` : ""}</div>`;
+}
+const dl = rows => `<dl>${rows.filter(([, v]) => v != null && v !== "").map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
+function compactHTML(h) {
+  const r = h.rec;
+  const rows = h.kind === "cage" ? [["From", r.origin], ["Delivered", fmtTime(r.deliveredAt)]]
+    : h.kind === "pallet" ? [["Route", r.route || r.destination], ["Lane", r.lane]]
+    : r.missing ? [["Output", "No data"]] : [["Today", n0(r.units) + " units"], ["Status", r.status]];
+  return head(h) + dl(rows) + `<div class="tip-hint">Click for ${h.kind === "bench" ? "output" : "SKUs and details"}</div>`;
+}
+function fullHTML(h) {
+  const r = h.rec, skus = Array.isArray(r.skus) ? r.skus : [], units = skus.reduce((a, s) => a + (+s.qty || 0), 0);
+  if (h.kind === "bench") {
+    if (r.missing) return head(h, true) + `<p class="tip-hint">No output data for this bench.</p>`;
+    return head(h, true) + dl([["Chute", r.chute], ["Operator", r.operator], ["Status", r.status], ["Units today", n0(r.units)], ["Units per hour", r.unitsPerHour], ["Last item", r.lastItemAt ? fmtTime(r.lastItemAt) : null]])
+      + `<div class="tip-s">By grade</div>${gradeBlock(r.grades || {})}<div class="tip-s">By despatch route</div>${routeBlock(r.routes)}`;
+  }
+  const rows = h.kind === "cage"
+    ? [["From", r.origin], ["Delivered", fmtTime(r.deliveredAt)], ["Trailer", r.trailer], ["Door", r.door != null ? "D" + r.door : null]]
+    : [["Route", r.route || r.destination], ["Lane", r.lane], ["Built", fmtTime(r.builtAt)], ["Packed at", r.packedAt], ["Totes", r.totes]];
+  return head(h, true) + dl(rows) + `<div class="tip-s">${skus.length} SKU${skus.length === 1 ? "" : "s"} · ${n0(units)} units</div>` + skuTable(skus);
+}
+
 function pickAt(cx, cy) {
   if (!hitMesh) return -1;
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
-  const hits = ray.intersectObject(hitMesh, false);
-  for (const hit of hits) { const h = hoverables[hit.instanceId]; if (current === "all" || current === h.zone) return hit.instanceId; }
+  for (const hit of ray.intersectObject(hitMesh, false)) { const h = hoverables[hit.instanceId]; if (current === "all" || current === h.zone) return hit.instanceId; }
   return -1;
 }
-function showTip(i, cx, cy) {
-  const h = hoverables[i];
+function setHover(i, cx, cy) {
   if (i !== hovered) {
-    hovered = i; tip.innerHTML = tipHTML(h); tip.hidden = false;
-    hoverBox.position.set(h.x, h.y, h.z); hoverBox.scale.set(h.w + 0.06, h.h + 0.06, h.d + 0.06); hoverBox.visible = true;
-    renderer.domElement.style.cursor = "pointer"; invalidate();
+    if (hovered >= 0 && hovered !== selected) setLift(hovered, 0);
+    hovered = i;
+    if (i >= 0) {
+      if (i !== selected) setLift(i, LIFT_HOVER);
+      tip.innerHTML = compactHTML(hoverables[i]); tip.hidden = i === selected;
+      renderer.domElement.style.cursor = "pointer";
+    } else { tip.hidden = true; hoverBox.visible = false; renderer.domElement.style.cursor = ""; }
+    invalidate();
   }
-  const sr = viewport.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
-  let x = cx - sr.left + 16, y = cy - sr.top + 16;
-  if (x + tw > sr.width - 8) x = cx - sr.left - tw - 16;
-  if (y + th > sr.height - 8) y = Math.max(8, sr.height - th - 8);
-  tip.style.transform = `translate(${Math.max(8, x)}px, ${y}px)`;
+  if (i >= 0 && !tip.hidden) {
+    const sr = viewport.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    let x = cx - sr.left + 16, y = cy - sr.top + 16;
+    if (x + tw > sr.width - 8) x = cx - sr.left - tw - 16;
+    if (y + th > sr.height - 8) y = Math.max(8, sr.height - th - 8);
+    tip.style.transform = `translate(${Math.max(8, x)}px, ${y}px)`;
+  }
 }
+function openCard(i) {
+  if (selected >= 0 && selected !== i) setLift(selected, 0);
+  selected = i; tip.hidden = true;
+  setLift(i, LIFT_OPEN);
+  card.innerHTML = fullHTML(hoverables[i]); card.hidden = false; card.scrollTop = 0;
+  invalidate();
+}
+function closeCard() {
+  if (selected < 0) return;
+  setLift(selected, selected === hovered ? LIFT_HOVER : 0);
+  selected = -1; card.hidden = true; selBox.visible = false; invalidate();
+}
+function hideTip() { setHover(-1); closeCard(); }
+card.addEventListener("click", e => { if (e.target.closest("[data-close]")) closeCard(); });
+const _a = new T.Vector3();
+function placeCard() {
+  if (hovered >= 0) frameBox(hoverBox, hovered, 0.06);
+  if (selected < 0) return;
+  frameBox(selBox, selected, 0.1);
+  const h = hoverables[selected];
+  _a.set(h.x, h.y + h.h / 2 + liftOf(selected), h.z); world.localToWorld(_a); _a.project(camera);
+  const w = viewport.clientWidth, ht = viewport.clientHeight, cw = card.offsetWidth, ch = card.offsetHeight;
+  const px = (_a.x + 1) / 2 * w, py = (1 - _a.y) / 2 * ht;
+  let x = px + 24; if (x + cw > w - 8) x = px - cw - 24;
+  const y = Math.min(Math.max(8, py - 40), Math.max(8, ht - ch - 8));
+  card.style.transform = `translate(${Math.max(8, Math.min(x, w - cw - 8))}px, ${y}px)`;
+}
+
 let pending = null;
-renderer.domElement.addEventListener("pointermove", e => {
-  if (e.pointerType !== "mouse" || e.buttons) return;
-  pending = [e.clientX, e.clientY];
-});
-renderer.domElement.addEventListener("pointerleave", () => { pending = null; if (!pinned) hideTip(); });
+renderer.domElement.addEventListener("pointermove", e => { if (e.pointerType === "mouse" && !e.buttons) pending = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener("pointerleave", () => { pending = null; setHover(-1); });
 let downAt = null;
 renderer.domElement.addEventListener("pointerdown", e => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener("pointerup", e => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) return;
-  const i = pickAt(e.clientX, e.clientY);              // tap / click pins the tooltip (touch screens)
-  if (i >= 0) { showTip(i, e.clientX, e.clientY); pinned = true; } else hideTip();
+  const i = pickAt(e.clientX, e.clientY);
+  if (i >= 0 && i !== selected) openCard(i); else closeCard();
 });
-controls.addEventListener("start", () => { if (!pinned) hideTip(); });
+controls.addEventListener("start", () => setHover(-1));
 
 function applyTheme() {
   scene.background = new T.Color(css("--scene"));
@@ -889,10 +1021,12 @@ requestAnimationFrame(() => {
       dirty = true;
     }
     controls.update();                                  // fires "change" while damping settles
-    if (pending) { const [x, y] = pending; pending = null; const i = pickAt(x, y); if (i >= 0) showTip(i, x, y); else if (!pinned) hideTip(); }
+    if (pending) { const [x, y] = pending; pending = null; setHover(pickAt(x, y), x, y); }
+    if (lifts.size && stepLifts(dt)) dirty = true;
     if (animate) { ticks.forEach(f => f(dt)); dirty = true; }
     if (!dirty) return;
     dirty = false;
+    placeCard();
     renderer.render(scene, camera);
     placeLabels();
   });

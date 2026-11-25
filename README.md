@@ -15,14 +15,17 @@ Opening the file straight from disk (`file://`) also works in most browsers.
 - The buttons along the top frame one section and grey out the others: View all, Inbound, Conveyor processing, Manual processing, Hanging processing, Storage, Despatch. Keys 0–6 do the same.
 - Drag to orbit, scroll or pinch to zoom, right-drag to pan. "Reset view" goes back to the framed shot.
 - A link can open a section directly, e.g. `index.html#conveyor`.
-- Hover an inbound roll cage or a despatch pallet to see where it came from or is going, when it arrived or was built, and the SKUs inside. On a touch screen, tap it instead.
+- Hover an inbound roll cage or a despatch pallet: it lifts slightly and a short card shows where it came from or is going. Click it to pop it out and open the full card with every SKU. On a touch screen, tap.
+- Click a conveyor pack bench to see its output today, split by grade (A, B, C) and despatch route. The Conveyor processing panel shows the same split for the whole day.
 
 ## Hover data
 
 `js/sample-data.js` holds made-up records (`window.ASC_DATA`). Swap it for a real feed with the same shape:
 
 - `inboundCages[]`: `{ id, origin, deliveredAt, trailer, door, skus: [{ sku, description, qty }] }`, filled into the inbound lanes in order.
-- `despatchPallets[]`: `{ id, lane, destination, builtAt, packedAt, toteColour, totes, skus: [...] }`, placed in their lane (1-based).
+- `despatchPallets[]`: `{ id, lane, route, builtAt, packedAt, toteColour, totes, skus: [...] }`, placed in their lane (1-based).
+- `benchOutput[]`: `{ bench: "7A", chute, operator, status, units, unitsPerHour, lastItemAt, grades: { A, B, C }, routes: { [route]: units } }`. The conveyor day totals are summed from these.
+- `routes[]`: the despatch routes, in the order they are listed.
 
 ## Performance
 
