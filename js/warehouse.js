@@ -795,12 +795,12 @@ function renderPanel() {
     return;
   }
   const z = Z[current], cfg = C[current] || {};
-  panel.innerHTML = `<div><div class="kicker"><span class="swatch" style="background:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[current]}</p></div>
-    <div><h3>In this section</h3><div class="stats">${z.stats.map(([l, v]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("")}</div></div>
+  panel.innerHTML = `<button class="btn back" id="back-all">← Back to view all</button>
     ${current === "conveyor" ? convOutputHTML() : ""}
+    <div><div class="kicker"><span class="swatch" style="background:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[current]}</p></div>
+    <div><h3>In this section</h3><div class="stats">${z.stats.map(([l, v]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("")}</div></div>
     ${cfg.guess ? guessNote : ""}
-    ${current === "inbound" || current === "despatch" || current === "conveyor" ? dataNote : `<p class="notes">Area about ${Math.round(z.box.x1 - z.box.x0)} × ${Math.round(z.box.z1 - z.box.z0)} m. Fill levels are illustrative until live data is connected.</p>`}
-    <button class="btn" id="back-all">Back to view all</button>`;
+    ${current === "inbound" || current === "despatch" || current === "conveyor" ? dataNote : `<p class="notes">Area about ${Math.round(z.box.x1 - z.box.x0)} × ${Math.round(z.box.z1 - z.box.z0)} m. Fill levels are illustrative until live data is connected.</p>`}`;
   panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
 }
 /* Conveyor day output, summed from the bench records. */
