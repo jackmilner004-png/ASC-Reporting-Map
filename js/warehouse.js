@@ -33,8 +33,9 @@ const ZONES = [
   { id: "conveyor", name: "Conveyor processing", color: "#e0a800", key: "2" },
   { id: "manual",   name: "Manual processing",   color: "#2f9e6e", key: "3" },
   { id: "hanging",  name: "Hanging processing",  color: "#8a5cc9", key: "4" },
-  { id: "storage",  name: "Storage",             color: "#cf5f34", key: "5" },
-  { id: "despatch", name: "Despatch",            color: "#c93a6a", key: "6" }
+  { id: "hangstore", name: "Hanging storage",    color: "#26a6c2", key: "5" },
+  { id: "storage",  name: "Storage",             color: "#cf5f34", key: "6" },
+  { id: "despatch", name: "Despatch",            color: "#c93a6a", key: "7" }
 ];
 const Z = Object.fromEntries(ZONES.map(z => [z.id, z]));
 
@@ -398,6 +399,9 @@ function railRun(zone, x0, len, z, fill) {
 /* Things the pointer can hover: { kind, rec, zone, x, y, z, w, h, d } in building coordinates. */
 const hoverables = [];
 const DATA = Object.assign({ inboundCages: [], despatchPallets: [], benchOutput: [], routes: [] }, window.ASC_DATA || {});
+DATA.stock = Object.assign({ vendors: [] }, DATA.stock);
+DATA.stock.racking = Object.assign({ pallets: [] }, DATA.stock.racking);
+DATA.stock.hanging = Object.assign({ garments: [] }, DATA.stock.hanging);
 const BENCH_DATA = Object.fromEntries(DATA.benchOutput.map(b => [String(b.bench), b]));
 
 /* =========================================================================
@@ -425,16 +429,17 @@ const convW = 1 + 2 * turnR + CV.inclineLength + loopR + loopLen + loopR + 3;
 
 const inLane = 1.25, inSlot = 0.88, inApron = 4.5;            // inbound cage lanes run east from the west wall
 const dsLane = 1.5, dsSlot = 1.35, dsApron = 5;               // despatch pallet lanes, same direction
-const rackPitch = 4.4;
+const rackDepth = 1.1, rackB2B = 0.1, rackAisle = 3.2, rackWallAisle = 2.0;   // back-to-back pairs of rack rows
+const rackPairs = Math.ceil(ST.rackRows / 2), bayW = 2.75;
 const margin = 1.5, gapX = 4, gapZ = 3;
 
-const midW0 = Math.max(convW, 20);
+const midW0 = Math.max(convW, 20, ST.bays * bayW + 2);
 const dims = {
   inbound:  { w: inApron + IN.cagesPerLane * inSlot + 1.5, d: Math.max(IN.lanes * inLane + 2, doorsIn * 5.5) },
   despatch: { w: dsApron + DS.palletsPerLine * dsSlot + 1.5, d: Math.max(DS.lines * dsLane + 2, doorsOut * 5.5) },
   hangProc: { w: midW0, d: 3 + HG.rails * 1.8 + 1 },
   conveyor: { w: convW, d: takeOff * 2 + 1.5 },
-  storage:  { w: midW0, d: ST.rackRows * rackPitch + 0.5 },
+  storage:  { w: midW0, d: rackWallAisle * 2 + rackPairs * (rackDepth * 2 + rackB2B) + (rackPairs - 1) * rackAisle },
   hangStor: { w: HG.storageRailLength + 4, d: HG.storageRails * 1.1 + 2 },
   manual:   { w: MN.benchesPerRow * 2.5 + 6, d: MN.rows * 3.4 + 3 }
 };
@@ -460,7 +465,7 @@ const AREAS = {
 }
 const rects = {
   inbound: [AREAS.inbound], despatch: [AREAS.despatch], conveyor: [AREAS.conveyor],
-  manual: [AREAS.manual], hanging: [AREAS.hangProc, AREAS.hangStor], storage: [AREAS.storage]
+  manual: [AREAS.manual], hanging: [AREAS.hangProc], hangstore: [AREAS.hangStor], storage: [AREAS.storage]
 };
 /* Door centres along the west wall (z), inbound doors first. */
 const doorZ = [];
@@ -596,51 +601,93 @@ function buildManual() {
   return [["Benches", benches], ["Rows", MN.rows], ["Feed cages", MN.rows], ["Oversize pallets", MN.rows]];
 }
 
-/* ---------- Hanging: processing rails along the back wall + dense hanging storage ---------- */
+/* ---------- Hanging processing: rails along the back wall with benches ---------- */
 function buildHanging() {
-  const z = "hanging", p = AREAS.hangProc, s = AREAS.hangStor;
+  const z = "hanging", p = AREAS.hangProc;
   const len = Math.floor((p.x1 - p.x0 - 4) / 3) * 3, x0 = p.x0 + (p.x1 - p.x0 - len) / 2;
   let garments = 0;
   for (let i = 0; i < HG.rails; i++) garments += railRun(z, x0, len, p.z0 + 1.2 + i * 1.8, HG.fill);
   for (let b = 0; b < HG.benches; b++) dressedBench(z, p.x0 + 3 + (b + 0.5) * (p.x1 - p.x0 - 6) / HG.benches, p.z1 - 1.1, 0, "hanging");
-  const sl = Math.floor(HG.storageRailLength / 3) * 3, sx0 = s.x0 + (s.x1 - s.x0 - sl) / 2;
-  let stored = 0;
-  for (let i = 0; i < HG.storageRails; i++) stored += railRun(z, sx0, sl, s.z0 + 1 + i * 1.1, HG.storageFill);
-  return [["Processing rails", HG.rails], ["Storage rails", HG.storageRails], ["Garments in process", garments], ["Garments stored", stored], ["Benches", HG.benches], ["Rail length", HG.rails * len + HG.storageRails * sl + " m"]];
+  return [["Processing rails", HG.rails], ["Benches", HG.benches], ["Garments in process", garments], ["Rail length", HG.rails * len + " m"]];
 }
 
-/* ---------- Racking storage along the south wall ---------- */
+/* ---------- Hanging storage: one garment per slot, placed from the stock data ---------- */
+const HSTOCK = DATA.stock.hanging, slotPitch = 0.13;
+const hangSlots = Math.floor((Math.floor(HG.storageRailLength / 3) * 3 - 0.3) / slotPitch);
+function buildHangStore() {
+  const z = "hangstore", s = AREAS.hangStor, rails = HSTOCK.rails || HG.storageRails, perRail = HSTOCK.slotsPerRail || hangSlots;
+  const sl = Math.floor(HG.storageRailLength / 3) * 3, sx0 = s.x0 + (s.x1 - s.x0 - sl) / 2;
+  const railZ = i => s.z0 + 1 + i * 1.1;
+  for (let i = 0; i < rails; i++) for (let k = 0; k < sl / 3; k++) put(z, "rail", {}, sx0 + 1.5 + k * 3, 0, railZ(i));
+  let shown = 0;
+  for (const g of HSTOCK.garments) {
+    const m = /HS-R(\d+)-S(\d+)/.exec(g.location || ""); if (!m) continue;
+    const ri_ = +m[1] - 1, si = +m[2] - 1;
+    if (ri_ < 0 || ri_ >= rails || si < 0 || si >= Math.min(perRail, hangSlots)) continue;
+    const x = sx0 + 0.15 + si * slotPitch, zz = railZ(ri_);
+    put(z, "garment", { colour: GARMENT_COLOURS[(+m[2] * 7 + ri_ * 3) % GARMENT_COLOURS.length] }, x, 0, zz, (R() - 0.5) * 0.12);
+    hoverables.push({ kind: "garment", rec: g, zone: z, x, y: 1.25, z: zz, w: 0.12, h: 1.1, d: 0.5, lift: false });
+    shown++;
+  }
+  const cap = rails * Math.min(perRail, hangSlots);
+  return [["Storage rails", rails], ["Garment slots", cap], ["Garments stored", shown], ["In use", Math.round(100 * shown / cap) + "%"]];
+}
+
+/* ---------- Pallet racking along the south wall, placed from the stock data ----------
+   Location IDs: R<row>-B<bay>-L<level>-<A|B>. Rows come in back-to-back pairs;
+   row 1 is nearest the south wall. Level L0 is the floor. */
+const RSTOCK = DATA.stock.racking;
+const STOCK_COL = { consumables: "#b98a52", jobber: "#d64545", dropship: "#e86aa6" };
+const STOCK_NAME = { consumables: "Consumables", jobber: "Jobber (grade C)", dropship: "Dropship" };
+function rackRowZ(row) {   // row 1-based -> { z, face } (face = +1 opens to the south, -1 to the north)
+  const r = AREAS.storage, p = Math.floor((row - 1) / 2), south = (row - 1) % 2 === 0;
+  const pairC = r.z1 - rackWallAisle - rackDepth - rackB2B / 2 - p * (rackDepth * 2 + rackB2B + rackAisle);
+  return { z: pairC + (south ? 1 : -1) * (rackDepth + rackB2B) / 2, face: south ? 1 : -1 };
+}
+function rackBayX(bay) { const r = AREAS.storage, cx = (r.x0 + r.x1) / 2; return cx + (bay - 1 - (ST.bays - 1) / 2) * bayW; }
+function stockPallet(zone, rec, x, y, zz, maxH) {
+  put(zone, "pallet", { type: "uk" }, x, y, zz, PI / 2);
+  const at = rot(x, zz, PI / 2);
+  if (rec.type === "consumables") {
+    const grid = [[-0.305, -0.23], [0.305, -0.23], [-0.305, 0.23], [0.305, 0.23]], layers = Math.max(1, Math.min(2, Math.floor(maxH / H.parcelM)));
+    for (let l = 0; l < layers; l++) for (const [gx, gz] of grid) { const [px, pz] = at(gx, gz); loose(zone, "parcelM", px, y + 0.144 + l * H.parcelM, pz, PI / 2); }
+    return 0.144 + layers * H.parcelM;
+  }
+  const n = Math.min((rec.totes || []).length || 12, 4 * Math.floor((maxH - 0.15) / 0.3)), grid = [[-0.3, -0.2], [0.3, -0.2], [-0.3, 0.2], [0.3, 0.2]];
+  for (let i = 0; i < n; i++) { const [px, pz] = at(grid[i % 4][0], grid[i % 4][1]); put(zone, "toteLow", { colour: rec.toteColour || (rec.type === "jobber" ? "red" : "pink") }, px, y + 0.144 + Math.floor(i / 4) * 0.3, pz, PI / 2); }
+  return 0.144 + Math.ceil(n / 4) * 0.3;
+}
 function buildStorage() {
   const r = AREAS.storage, z = "storage";
   const levels = [0, ...ST.beamLevels], height = ST.beamLevels[ST.beamLevels.length - 1] + 1.4;
-  const bays = Math.max(1, Math.floor((r.x1 - r.x0 - 1) / 2.75)), cx = (r.x0 + r.x1) / 2;
-  let positions = 0, used = 0;
-  for (let row = 0; row < ST.rackRows; row++) {
-    const zz = r.z1 - 0.7 - row * rackPitch;
-    for (let b = 0; b < bays; b++) {
-      const x = cx + (b - (bays - 1) / 2) * 2.75;
-      put(z, "rack", { levels: ST.beamLevels, height: +height.toFixed(2) }, x, 0, zz);
-      levels.forEach((y, li) => {
-        const clear = (li + 1 < levels.length ? levels[li + 1] - 0.15 : y + 1.3) - y - 0.2;
-        for (const dx of [-0.66, 0.66]) {
-          positions++;
-          if (R() > ST.fill) continue;
-          used++;
-          palletLoad(z, x + dx, y, zz, PI / 2, pick(["parcelM", "parcelM", "tote", "parcelS", "bagM"]), clear);
-        }
-      });
-    }
+  const rows = ST.rackRows, bays = ST.bays, cap = rows * bays * levels.length * 2;
+  for (let row = 1; row <= rows; row++) for (let b = 1; b <= bays; b++) put(z, "rack", { levels: ST.beamLevels, height: +height.toFixed(2) }, rackBayX(b), 0, rackRowZ(row).z);
+  // painted location labels on the aisle floor every 5 bays
+  let used = 0;
+  for (const rec of RSTOCK.pallets) {
+    const m = /R(\d+)-B(\d+)-L(\d+)-([AB])/.exec(rec.location || ""); if (!m) continue;
+    const row = +m[1], bay = +m[2], li = +m[3], pos = m[4];
+    if (row < 1 || row > rows || bay < 1 || bay > bays || li >= levels.length) continue;
+    const { z: zz, face } = rackRowZ(row), x = rackBayX(bay) + (pos === "A" ? -0.66 : 0.66), y = levels[li];
+    const clear = (li + 1 < levels.length ? levels[li + 1] - 0.15 : y + 1.4) - y - 0.2;
+    beginItem();
+    const h = stockPallet(z, rec, x, y, zz, clear);
+    hoverables.push({ kind: "stock", rec, zone: z, x, y: y + h / 2, z: zz, w: 1.06, h, d: 1.22, parts: endItem(), lift: true, slide: face });
+    used++;
   }
-  return [["Rack rows", ST.rackRows], ["Bays", ST.rackRows * bays], ["Pallet positions", positions], ["Occupied", Math.round(100 * used / positions) + "%"]];
+  ZONE_STATS_EXTRA.storage = { capacity: cap, used };
+  return [["Rack rows", rows], ["Bays", rows * bays], ["Pallet spaces", cap], ["In use", used], ["Free", cap - used], ["Occupied", Math.round(100 * used / cap) + "%"]];
 }
+const ZONE_STATS_EXTRA = {};
 
-const BUILD = { inbound: buildInbound, conveyor: buildConveyor, manual: buildManual, hanging: buildHanging, storage: buildStorage, despatch: buildDespatch };
+const BUILD = { inbound: buildInbound, conveyor: buildConveyor, manual: buildManual, hanging: buildHanging, hangstore: buildHangStore, storage: buildStorage, despatch: buildDespatch };
 const ZONE_TEXT = {
   inbound: "All inbound arrives in roll cages through the inbound doors on the west wall. Hover a cage to see where it came from, when it arrived and what is in it.",
   conveyor: `Cages are tipped onto a low induction belt, which turns and climbs an incline to a loop sorter at ${CV.sorterHeight} m. ${CV.chutes} chutes drop from both sides of the loop to ${CV.chutes * CV.benchesPerChute} pack benches. Packed totes leave on floor roller lines to the tote-out spurs in the south-west corner, which face despatch.`,
   manual: "Benches for returns that cannot go down the conveyor: oversized, damaged or needing a closer check.",
-  hanging: "Garment rails along the back wall for hanging processing, with dense hanging storage in the north-east corner.",
-  storage: "Pallet racking along the south wall.",
+  hanging: "Garment rails along the back wall for hanging processing, with benches along the front.",
+  hangstore: "Dense hanging storage in the north-east corner. Every garment has a unique ID and a rail slot location (HS-R03-S041 = rail 3, slot 41).",
+  storage: "Pallet racking along the south wall: consumables in boxes, red tote pallets for Jobber (grade C) and pink tote pallets for dropship vendors. Every pallet and tote has a unique ID, and every space has a location ID (R03-B12-L2-A = row 3, bay 12, level 2, position A; L0 is the floor).",
   despatch: `${DS.lines} despatch lanes off the west-wall doors. Each pallet holds ${DS.totesPerPallet} totes. Hover a pallet to see where it is going and what is on it.`
 };
 
@@ -745,8 +792,10 @@ const EL = 50 * PI / 180, AZ = -12 * PI / 180;
 const ALL = { x0: -BW / 2, x1: BW / 2, z0: -BD / 2, z1: BD / 2 };
 /* The glass panels cover the edges of the canvas, so framing uses the free area between them. */
 let inset = { l: 0, r: 0, b: 0 };
+const WIDE = new Set(["storage", "hangstore"]);       // sections whose detail panel opens wide
 function hudInsets() {
   const dk = document.getElementById("dock");
+  if (dk && getComputedStyle(dk).position === "absolute" && WIDE.has(current)) return { l: 0, r: Math.round(viewport.clientWidth * 0.75) + 16, b: 0 };
   if (!dk || getComputedStyle(dk).position !== "absolute") return { l: 0, r: 0, b: 0 };
   const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), Rr = document.getElementById("rail-right").getBoundingClientRect();
   return { l: Math.max(0, L.right - st.left), r: Math.max(0, st.right - Rr.left), b: Math.max(0, st.bottom - dk.getBoundingClientRect().top) };
@@ -787,6 +836,8 @@ function flyTo(b, instant) {
 let current = "all", greyCol = new T.Color(), shell;
 function setFocus(id, instant) {
   current = id;
+  document.querySelector(".app").classList.toggle("wide", WIDE.has(id));
+  resize();
   recolour();
   dispatchEvent(new CustomEvent("asc-map-focus", { detail: id }));
   hideTip();
@@ -842,12 +893,16 @@ function renderPanel() {
   const guessNote = `<p class="guess">Placement is a first guess. Send the floor plan and this zone will be moved to match.</p>`;
   const dataNote = `<p class="notes">Data: <b>${esc(DATA.source || "Unknown source")}</b>${DATA.asOf ? `, as of ${esc(fmtTime(DATA.asOf))}` : ""}, from <code>js/sample-data.js</code>.</p>`;
   if (current === "all") {
-    const totals = [["Bay doors", D.count], ["Despatch lines", DS.lines], ["Chutes", CV.chutes], ["Pack benches", CV.chutes * CV.benchesPerChute]];
+    const sx = ZONE_STATS_EXTRA.storage || {};
+    const totals = [["Bay doors", D.count], ["Despatch lines", DS.lines], ["Chutes", CV.chutes], ["Pack benches", CV.chutes * CV.benchesPerChute], ["Pallet spaces", sx.capacity || 0], ["Pallets stored", sx.used || 0]];
     panel.innerHTML = `<div><div class="kicker">Whole site</div><h2>${esc(C.site.name)}</h2>
       <p class="blurb">Single floor, about ${Math.round(BW)} × ${Math.round(BD)} m. All bay doors are on the west wall, on the left of the view.</p></div>
       <div><h3>Headline counts</h3><div class="stats">${totals.map(([l, v]) => `<div class="stat"><b data-count="${v}">${v}</b><span>${l}</span></div>`).join("")}</div></div>
-      <p class="notes">Pick a section on the left, or a card along the bottom. Hover or click a cage, pallet or pack bench for its details. Hover an area to light it up, click it to open that section. Keys 0–6 also switch section. Turn on Orbit to rotate, zoom and pan freely.</p>
+      <p class="notes">Pick a section on the left, or a card along the bottom. Hover or click a cage, pallet or pack bench for its details. Hover an area to light it up, click it to open that section. Keys 0–7 also switch section. Turn on Orbit to rotate, zoom and pan freely.</p>
       <p class="notes">Doors ${doorsIn > 1 ? "1–" + doorsIn : "1"} are shown as inbound and the rest as despatch. That split is a guess. All counts live in <code>js/layout-config.js</code>.</p>${dataNote}`;
+  } else if (WIDE.has(current)) {
+    panel.innerHTML = stockPanelHTML(current);
+    wireStockPanel(current);
   } else {
     const z = Z[current], cfg = C[current] || {};
     panel.innerHTML = `<button class="btn back" id="back-all">← Back to view all</button>
@@ -862,6 +917,130 @@ function renderPanel() {
   panel.scrollTop = 0;
   countUp(panel);
 }
+/* ---------- Wide stock panel for Storage and Hanging storage ----------
+   Cards with total stockholding, split charts, then a searchable table of every SKU line. */
+const fmtShort = s => { const d = new Date(s); return isNaN(d) ? (s || "") : d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" }); };
+const daysIn = s => Math.max(0, Math.floor((new Date(DATA.stock.asOf || DATA.asOf || Date.now()) - new Date(s)) / 864e5));
+const AGE = [["0–7", 7], ["8–14", 14], ["15–30", 30], ["31–60", 60], ["61–90", 90], ["90+", 1e9]];
+const tally = (list, key, val = () => 1) => { const o = {}; for (const x of list) { const k = key(x); if (k != null) o[k] = (o[k] || 0) + val(x); } return o; };
+function rankBars(o, colour) {
+  const rows = Object.entries(o).sort((a, b) => b[1] - a[1]), max = Math.max(1, ...rows.map(r => r[1])), total = rows.reduce((a, r) => a + r[1], 0);
+  return `<ul class="bars"${colour ? ` style="--bar:${colour}"` : ""}>${rows.map(([n, v], j) => `<li style="--j:${j}" title="${esc(n)}: ${n0(v)} (${pct(v, total)})"><span class="bn">${esc(n)}</span><span class="bt"><span style="width:${(100 * v / max).toFixed(1)}%"></span></span><b>${n0(v)}</b></li>`).join("")}</ul>`;
+}
+function plainCols(labels, values, unit, what) {
+  const max = Math.max(1, ...values);
+  return `<div class="cols tall" role="img" aria-label="${what}: ${labels.map((l, j) => `${l} ${values[j]}`).join(", ")}">${values.map((v, j) => `<span style="height:${(100 * v / max).toFixed(1)}%;--j:${j}" title="${labels[j]}: ${v}" data-r="${labels[j]} · ${n0(v)} ${unit}"></span>`).join("")}</div>
+    <div class="axis labels">${labels.map(x => `<span>${x}</span>`).join("")}</div><div class="axis"><span></span><span class="read" aria-live="polite"></span><span></span></div>`;
+}
+const stockCache = {};
+function stockModel(kind) {
+  if (stockCache[kind]) return stockCache[kind];
+  const rows = [];
+  let m;
+  if (kind === "storage") {
+    const P = RSTOCK.pallets, cap = (ZONE_STATS_EXTRA.storage || {}).capacity || 1000;
+    for (const p of P) {
+      const base = { type: p.type, owner: owner(p), pallet: p.id, loc: p.location, delivered: p.deliveredAt, scanned: p.scannedAt, ref: p.id };
+      if (p.totes) for (const t of p.totes) for (const l of t.lines) rows.push({ ...base, sku: l.sku, desc: l.description, qty: l.qty, tote: t.id });
+      else for (const l of p.lines || []) rows.push({ ...base, sku: l.sku, desc: l.description, qty: l.qty, tote: "" });
+    }
+    const by = t => P.filter(p => p.type === t), totes = list => list.reduce((a, p) => a + (p.totes ? p.totes.length : 0), 0), units = list => list.reduce((a, p) => a + stockUnits(p), 0);
+    const J = by("jobber"), Dp = by("dropship"), Cn = by("consumables"), vendors = new Set(Dp.map(p => p.vendor)).size;
+    const ages = AGE.map(() => 0); for (const p of P) { const d = daysIn(p.scannedAt); ages[AGE.findIndex(a => d <= a[1])]++; }
+    const lines = list => list.flatMap(p => p.totes ? p.totes.flatMap(t => t.lines) : p.lines || []);
+    m = {
+      rows, ownerTypes: ["jobber", "dropship", "consumables"], idLabel: "Pallet", hasTote: true,
+      cards: [
+        { t: "jobber", label: "Jobber · grade C", big: units(J), unit: "units", sub: `<b>${J.length}</b> red tote pallets · <b>${n0(totes(J))}</b> totes` },
+        { t: "dropship", label: "Dropship vendors", big: units(Dp), unit: "units", sub: `<b>${Dp.length}</b> pink tote pallets · <b>${n0(totes(Dp))}</b> totes · <b>${vendors}</b> vendors` },
+        { t: "consumables", label: "Consumables", big: units(Cn), unit: "cases", sub: `<b>${Cn.length}</b> pallets · <b>${new Set(lines(Cn).map(l => l.sku)).size}</b> product lines` },
+        { t: "cap", label: "Racking capacity", big: P.length, of: cap, unit: "pallets", segs: [["jobber", J.length], ["dropship", Dp.length], ["consumables", Cn.length]], sub: `<b>${pct(P.length, cap)}</b> full · <b>${n0(cap - P.length)}</b> free spaces` }
+      ],
+      charts: [
+        { title: "Dropship units by vendor", body: rankBars(tally(Dp, p => p.vendor, stockUnits), STOCK_COL.dropship), scroll: true, wide: true },
+        { title: "Jobber units by category", body: rankBars(tally(lines(J), l => l.category, l => +l.qty || 0), STOCK_COL.jobber) },
+        { title: "Consumables cases by item", body: rankBars(tally(lines(Cn), l => (l.description || "").replace(/ \(.*/, ""), l => +l.qty || 0), STOCK_COL.consumables), scroll: true },
+        { title: "Pallets by days in location", body: plainCols(AGE.map(a => a[0]), ages, "pallets", "Pallets by days since scanned into location") }
+      ]
+    };
+  } else {
+    const G = HSTOCK.garments, cap = (HSTOCK.rails || HG.storageRails) * Math.min(HSTOCK.slotsPerRail || hangSlots, hangSlots);
+    for (const g of G) rows.push({ type: g.type, owner: owner(g), pallet: g.id, loc: g.location, delivered: g.deliveredAt, scanned: g.scannedAt, ref: g.id, sku: g.sku, desc: g.description, qty: 1, tote: "" });
+    const J = G.filter(g => g.type === "jobber"), Dp = G.filter(g => g.type === "dropship"), vendors = new Set(Dp.map(g => g.vendor)).size;
+    const rails = HSTOCK.rails || HG.storageRails, perRail = Array(rails).fill(0);
+    for (const g of G) { const k = /HS-R(\d+)/.exec(g.location); if (k && +k[1] <= rails) perRail[+k[1] - 1]++; }
+    const ages = AGE.map(() => 0); for (const g of G) { const d = daysIn(g.scannedAt); ages[AGE.findIndex(a => d <= a[1])]++; }
+    m = {
+      rows, ownerTypes: ["jobber", "dropship"], idLabel: "Garment ID", hasTote: false,
+      cards: [
+        { t: "jobber", label: "Jobber · grade C", big: J.length, unit: "garments", sub: `<b>${new Set(J.map(g => g.sku)).size}</b> SKUs` },
+        { t: "dropship", label: "Dropship vendors", big: Dp.length, unit: "garments", sub: `<b>${vendors}</b> vendors · <b>${new Set(Dp.map(g => g.sku)).size}</b> SKUs` },
+        { t: "total", label: "Total hanging stock", big: G.length, unit: "garments", sub: `on <b>${rails}</b> rails` },
+        { t: "cap", label: "Rail capacity", big: G.length, of: cap, unit: "slots", segs: [["jobber", J.length], ["dropship", Dp.length]], sub: `<b>${pct(G.length, cap)}</b> full · <b>${n0(cap - G.length)}</b> free slots` }
+      ],
+      charts: [
+        { title: "Dropship garments by vendor", body: rankBars(tally(Dp, g => g.vendor), STOCK_COL.dropship), scroll: true, wide: true },
+        { title: "Jobber garments by category", body: rankBars(tally(J, g => g.category), STOCK_COL.jobber) },
+        { title: "Garments by rail", body: plainCols(perRail.map((_, i) => "R" + (i + 1)), perRail, "garments", "Garments per storage rail") },
+        { title: "Garments by days in location", body: plainCols(AGE.map(a => a[0]), ages, "garments", "Garments by days since scanned into location") }
+      ]
+    };
+  }
+  return (stockCache[kind] = m);
+}
+function stockPanelHTML(kind) {
+  const z = Z[kind], m = stockModel(kind);
+  const card = c => {
+    const col = STOCK_COL[c.t] || z.color;
+    const seg = c.segs ? `<div class="seg-bar cap" role="img" aria-label="${c.segs.map(([t, v]) => `${STOCK_NAME[t]} ${v}`).join(", ")}, free ${c.of - c.big}">${c.segs.map(([t, v]) => v ? `<span style="flex:${v};background:${STOCK_COL[t]}" title="${STOCK_NAME[t]}: ${v}"></span>` : "").join("")}<span class="free" style="flex:${Math.max(0, c.of - c.big)}"></span></div>` : "";
+    return `<div class="scard" style="--c:${col}"><div class="kh"><span class="dot"></span>${c.label}</div>
+      <div class="big"><b data-count="${c.big}">${n0(c.big)}</b>${c.of ? `<span class="of"> / ${n0(c.of)}</span>` : ""} <span class="u">${c.unit}</span></div>${seg}<div class="sub">${c.sub}</div></div>`;
+  };
+  const chips = [["all", "All"], ...m.ownerTypes.map(t => [t, STOCK_NAME[t]])];
+  const cols = [["sku", "SKU"], ["desc", "Description"], ["qty", "Qty"], ["owner", "Stock"], ...(m.hasTote ? [["tote", "Tote ID"]] : []), ["pallet", m.idLabel], ["loc", "Location"], ["delivered", "Delivered to site"], ["scanned", "Scanned into location"]];
+  return `<button class="btn back" id="back-all">← Back to view all</button>
+    <div class="sp-head"><div><div class="kicker"><span class="swatch" style="background:${z.color};color:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[kind]}</p></div>
+      <p class="notes">${esc(DATA.source || "Sample data")}${DATA.stock.asOf ? `, as of ${esc(fmtTime(DATA.stock.asOf))}` : ""}. From <code>js/sample-stock.js</code>.</p></div>
+    <div class="sp-cards">${m.cards.map(card).join("")}</div>
+    <div class="sp-charts">${m.charts.map(c => `<div class="cbox${c.wide ? " wide" : ""}" style="--c:${z.color}"><h3>${c.title}</h3><div class="${c.scroll ? "scroll" : ""}">${c.body}</div></div>`).join("")}</div>
+    <div class="sp-table">
+      <div class="sp-tools"><h3>Stock detail</h3>
+        <input type="search" id="sp-q" placeholder="Search SKU, item, ID, location or vendor" aria-label="Search stock">
+        <div class="chips" role="group" aria-label="Filter by stock">${chips.map(([t, n], i) => `<button class="chip" data-t="${t}" aria-pressed="${i === 0}">${n}</button>`).join("")}</div>
+        <span class="count" id="sp-count"></span></div>
+      <table class="stock"><thead><tr>${cols.map(([k, n]) => `<th data-k="${k}"${k === "qty" ? ' class="num"' : ""}><button>${n}</button></th>`).join("")}</tr></thead><tbody id="sp-body"></tbody></table>
+      <button class="btn more" id="sp-more" hidden>Show more</button>
+    </div>`;
+}
+const tableState = {};
+function wireStockPanel(kind) {
+  const m = stockModel(kind), st = tableState[kind] = tableState[kind] || { q: "", t: "all", k: "loc", dir: 1, limit: 150 };
+  const body = panel.querySelector("#sp-body"), q = panel.querySelector("#sp-q"), more = panel.querySelector("#sp-more"), count = panel.querySelector("#sp-count");
+  q.value = st.q;
+  panel.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.t === st.t)));
+  const draw = () => {
+    const needle = st.q.trim().toLowerCase();
+    let rows = m.rows.filter(r => (st.t === "all" || r.type === st.t) && (!needle || `${r.sku} ${r.desc} ${r.owner} ${r.tote} ${r.pallet} ${r.loc}`.toLowerCase().includes(needle)));
+    const k = st.k; rows = rows.slice().sort((a, b) => (k === "qty" ? a[k] - b[k] : String(a[k]).localeCompare(String(b[k]))) * st.dir);
+    const shown = rows.slice(0, st.limit);
+    body.innerHTML = shown.map(r => `<tr data-ref="${esc(r.ref)}" tabindex="0"><td class="mono">${esc(r.sku)}</td><td>${esc(r.desc)}</td><td class="num">${n0(r.qty)}</td><td><span class="own" style="--c:${STOCK_COL[r.type]}"></span>${esc(r.owner)}</td>${m.hasTote ? `<td class="mono">${esc(r.tote || "–")}</td>` : ""}<td class="mono">${esc(r.pallet)}</td><td class="mono">${esc(r.loc)}</td><td>${esc(fmtShort(r.delivered))}</td><td>${esc(fmtShort(r.scanned))}</td></tr>`).join("")
+      || `<tr><td colspan="9" class="empty">No stock matches.</td></tr>`;
+    count.textContent = `${n0(shown.length)} of ${n0(rows.length)} lines`;
+    more.hidden = rows.length <= st.limit;
+    panel.querySelectorAll("th").forEach(th => th.setAttribute("aria-sort", th.dataset.k === st.k ? (st.dir > 0 ? "ascending" : "descending") : "none"));
+  };
+  q.addEventListener("input", () => { st.q = q.value; st.limit = 150; draw(); });
+  panel.querySelector(".chips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; st.t = c.dataset.t; st.limit = 150; panel.querySelectorAll(".chip").forEach(x => x.setAttribute("aria-pressed", String(x === c))); draw(); });
+  panel.querySelector("thead").addEventListener("click", e => { const th = e.target.closest("th"); if (!th) return; st.dir = st.k === th.dataset.k ? -st.dir : 1; st.k = th.dataset.k; draw(); });
+  more.addEventListener("click", () => { st.limit += 300; draw(); });
+  const openRef = tr => { const i = HOVER_BY_REF.get(tr.dataset.ref); if (i != null) openCard(i); };
+  body.addEventListener("click", e => { const tr = e.target.closest("tr[data-ref]"); if (tr) openRef(tr); });
+  body.addEventListener("keydown", e => { const tr = e.target.closest("tr[data-ref]"); if (tr && e.key === "Enter") openRef(tr); });
+  draw();
+  panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
+}
+const HOVER_BY_REF = new Map();
+
 /* Charts animate again when clicked. A click on one column, bar or grade picks it out and shows its value. */
 function restartAnim(el) { if (!el) return; el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
 function clearSel(k) { k.classList.remove("has-sel"); k.querySelectorAll(".sel").forEach(x => x.classList.remove("sel")); const r = k.querySelector(".read"); if (r) r.textContent = ""; }
@@ -984,7 +1163,8 @@ function setLift(i, target) {
 }
 function applyLift(i, y) {
   for (const { k, i: idx } of hoverables[i].parts) {
-    const b = buckets.get(k); _m4.copy(b.list[idx]); _m4.elements[13] += y;
+    const b = buckets.get(k), h = hoverables[i]; _m4.copy(b.list[idx]);
+    if (h.slide) _m4.elements[14] += y * h.slide; else _m4.elements[13] += y;   // rack pallets slide out into the aisle
     for (const im of b.meshes) { im.setMatrixAt(idx, _m4); im.instanceMatrix.needsUpdate = true; }
   }
 }
@@ -1001,7 +1181,8 @@ function stepLifts(dt) {
 const liftOf = i => (lifts.get(i) || { cur: 0 }).cur;
 function frameBox(box, i, pad) {
   const h = hoverables[i];
-  box.position.set(h.x, h.y + liftOf(i), h.z); box.scale.set(h.w + pad, h.h + pad, h.d + pad); box.visible = true;
+  const l = liftOf(i);
+  box.position.set(h.x, h.y + (h.slide ? 0 : l), h.z + (h.slide ? l * h.slide : 0)); box.scale.set(h.w + pad, h.h + pad, h.d + pad); box.visible = true;
 }
 
 const sum = o => Object.values(o || {}).reduce((a, b) => a + (+b || 0), 0);
@@ -1024,7 +1205,9 @@ function skuTable(skus, limit) {
   return `<table class="skus">${show.map(s => `<tr><td class="sku">${esc(s.sku)}</td><td>${esc(s.description || "")}</td><td class="q">×${esc(s.qty)}</td></tr>`).join("")}</table>
     ${skus.length > show.length ? `<div class="tip-more">+ ${skus.length - show.length} more SKUs</div>` : ""}`;
 }
-const KIND = { cage: "Inbound cage", pallet: "Despatch pallet", bench: "Pack bench" };
+const KIND = { cage: "Inbound cage", pallet: "Despatch pallet", bench: "Pack bench", stock: "Storage pallet", garment: "Hanging garment" };
+const owner = r => r.type === "dropship" ? r.vendor || "Dropship" : r.type === "jobber" ? "Jobber (grade C)" : "Consumables";
+const stockUnits = r => r.totes ? r.totes.reduce((a, t) => a + t.lines.reduce((b, l) => b + (+l.qty || 0), 0), 0) : (r.lines || []).reduce((a, l) => a + (+l.qty || 0), 0);
 function head(h, closable) {
   const r = h.rec, id = h.kind === "bench" ? "Bench " + r.bench : (r.id || "No ID");
   return `<div class="tip-h"><span class="tip-k">${KIND[h.kind]}</span><b>${esc(id)}</b>${closable ? `<button class="x" aria-label="Close" data-close>×</button>` : ""}</div>`;
@@ -1032,6 +1215,8 @@ function head(h, closable) {
 const dl = rows => `<dl>${rows.filter(([, v]) => v != null && v !== "").map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
 function compactHTML(h) {
   const r = h.rec;
+  if (h.kind === "stock") return head(h) + dl([[r.type === "dropship" ? "Vendor" : "Stock", owner(r)], ["Location", r.location], [r.totes ? "Totes" : "Units", r.totes ? r.totes.length : n0(stockUnits(r))]]) + `<div class="tip-hint">Click for totes and SKUs</div>`;
+  if (h.kind === "garment") return head(h) + dl([["SKU", r.sku], ["Location", r.location], ["Stock", owner(r)]]) + `<div class="tip-hint">Click for details</div>`;
   const rows = h.kind === "cage" ? [["From", r.origin], ["Delivered", fmtTime(r.deliveredAt)]]
     : h.kind === "pallet" ? [["Route", r.route || r.destination], ["Lane", r.lane]]
     : r.missing ? [["Output", "No data"]] : [["Today", n0(r.units) + " units"], ["Status", r.status]];
@@ -1043,6 +1228,13 @@ function fullHTML(h) {
     if (r.missing) return head(h, true) + `<p class="tip-hint">No output data for this bench.</p>`;
     return head(h, true) + dl([["Chute", r.chute], ["Operator", r.operator], ["Status", r.status], ["Units today", n0(r.units)], ["Units per hour", r.unitsPerHour], ["Last item", r.lastItemAt ? fmtTime(r.lastItemAt) : null]])
       + `<div class="tip-s">By grade</div>${gradeBlock(r.grades || {})}<div class="tip-s">By despatch route</div>${routeBlock(r.routes)}`;
+  }
+  if (h.kind === "garment") return head(h, true) + dl([["SKU", r.sku], ["Item", r.description], ["Stock", owner(r)], ["Category", r.category], ["Location", r.location], ["Delivered", fmtTime(r.deliveredAt)], ["Scanned in", fmtTime(r.scannedAt)]]);
+  if (h.kind === "stock") {
+    const lines = r.totes ? r.totes.flatMap(t => t.lines.map(l => ({ ...l, tote: t.id }))) : (r.lines || []);
+    return head(h, true) + dl([[r.type === "dropship" ? "Vendor" : "Stock", owner(r)], ["Location", r.location], ["Delivered", fmtTime(r.deliveredAt)], ["Scanned in", fmtTime(r.scannedAt)], ["Totes", r.totes ? r.totes.length + " (" + (r.toteColour || "") + ")" : null]])
+      + `<div class="tip-s">${lines.length} SKU line${lines.length === 1 ? "" : "s"} · ${n0(stockUnits(r))} ${r.type === "consumables" ? "cases" : "units"}</div>
+      <table class="skus">${lines.map(l => `<tr>${l.tote ? `<td class="sku">${esc(l.tote)}</td>` : ""}<td class="sku">${esc(l.sku)}</td><td>${esc(l.description || "")}</td><td class="q">×${esc(l.qty)}</td></tr>`).join("")}</table>`;
   }
   const rows = h.kind === "cage"
     ? [["From", r.origin], ["Delivered", fmtTime(r.deliveredAt)], ["Trailer", r.trailer], ["Door", r.door != null ? "D" + r.door : null]]
@@ -1107,7 +1299,8 @@ function placeCard() {
   if (selected < 0) return;
   frameBox(selBox, selected, 0.1);
   const h = hoverables[selected];
-  _a.set(h.x, h.y + h.h / 2 + liftOf(selected), h.z); world.localToWorld(_a); _a.project(camera);
+  const l = liftOf(selected);
+  _a.set(h.x, h.y + h.h / 2 + (h.slide ? 0 : l), h.z + (h.slide ? l * h.slide : 0)); world.localToWorld(_a); _a.project(camera);
   const w = viewport.clientWidth, ht = viewport.clientHeight, cw = card.offsetWidth, ch = card.offsetHeight;
   const px = (_a.x + 1) / 2 * w, py = (1 - _a.y) / 2 * ht;
   let x = px + 24; if (x + cw > w - 8) x = px - cw - 24;
@@ -1165,6 +1358,12 @@ requestAnimationFrame(() => {
   shell = build();
   makeLabels();
   renderDock();
+  hoverables.forEach((h, i) => { if (h.kind === "stock" || h.kind === "garment") HOVER_BY_REF.set(h.rec.id, i); });
+  panel.addEventListener("click", e => {
+    const k = e.target.closest(".cbox, .scard"); if (!k) return;
+    const part = e.target.closest(".cols span, ul.bars li, .seg-bar span");
+    if (part) selectPart(k, part); else replay(k);
+  });
   resize();
   applyTheme();
   const start = location.hash.slice(1);

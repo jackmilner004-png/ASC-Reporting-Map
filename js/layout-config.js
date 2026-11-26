@@ -49,12 +49,13 @@ window.ASC_LAYOUT = {
     guess: false,
     rails: 4, fill: 0.7,            // processing rails run the width of the middle section
     benches: 8,
-    storageRails: 10, storageRailLength: 18, storageFill: 0.85
+    storageRails: 10, storageRailLength: 18   // hanging storage (its own section); stock comes from js/sample-stock.js
   },
 
   storage: {
-    guess: false,           // racking along the south wall. Bays fill the section width.
-    rackRows: 2, beamLevels: [1.8, 3.6, 5.4], fill: 0.75
+    guess: false,           // pallet racking along the south wall, in back-to-back pairs of rows
+    rackRows: 4, bays: 25,  // 4 rows x 25 bays x 5 levels x 2 positions = 1,000 pallet spaces
+    beamLevels: [1.6, 3.2, 4.8, 6.4]   // beam heights; the floor is level L0
   },
 
   despatch: {
