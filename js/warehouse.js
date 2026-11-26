@@ -735,9 +735,19 @@ function build() {
 /* ---------- Framing: eagle-eye view from the south side, angled down ---------- */
 const EL = 50 * PI / 180, AZ = -12 * PI / 180;
 const ALL = { x0: -BW / 2, x1: BW / 2, z0: -BD / 2, z1: BD / 2 };
+/* The glass panels cover the edges of the canvas, so framing uses the free area between them. */
+let inset = { l: 0, r: 0, b: 0 };
+function hudInsets() {
+  const dk = document.getElementById("dock");
+  if (!dk || getComputedStyle(dk).position !== "absolute") return { l: 0, r: 0, b: 0 };
+  const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), Rr = document.getElementById("rail-right").getBoundingClientRect();
+  return { l: Math.max(0, L.right - st.left), r: Math.max(0, st.right - Rr.left), b: Math.max(0, st.bottom - dk.getBoundingClientRect().top) };
+}
 function viewFor(b) {
   const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, sx = b.x1 - b.x0, sz = b.z1 - b.z0;
-  const fov = camera.fov * PI / 180, tanV = Math.tan(fov / 2), tanH = tanV * camera.aspect;
+  const vw = Math.max(1, viewport.clientWidth), vh = Math.max(1, viewport.clientHeight);
+  const fw = Math.max(0.3, (vw - inset.l - inset.r) / vw), fh = Math.max(0.3, (vh - inset.b) / vh);
+  const fov = camera.fov * PI / 180, tanV = Math.tan(fov / 2) * fh, tanH = Math.tan(fov / 2) * camera.aspect * fw;
   const halfV = (sz / 2) * Math.sin(EL) + 3 * Math.cos(EL), halfH = (sx / 2) * Math.cos(AZ) + (sz / 2) * Math.abs(Math.sin(AZ));
   const dist = Math.max(halfV / tanV, halfH / tanH) * 1.1 + (sz / 2) * Math.cos(EL) * 0.35;
   const target = new T.Vector3(cx, 0, cz);
@@ -762,6 +772,8 @@ function setFocus(id, instant) {
   flyTo(id === "all" ? ALL : Z[id].box, instant);
   document.querySelectorAll("#sections button").forEach(b => { const on = b.dataset.id === id; b.setAttribute("aria-pressed", String(on)); if (on && !instant) b.scrollIntoView({ block: "nearest", inline: "nearest" }); });
   renderPanel();
+  moveNavInd();
+  dockEl.querySelectorAll(".kpi").forEach(k => k.classList.toggle("on", k.dataset.id === id));
   try { history.replaceState(null, "", id === "all" ? location.pathname + location.search : "#" + id); } catch (e) {}
   invalidate();
 }
@@ -783,50 +795,103 @@ function recolour() {
 }
 
 /* ---------- UI ---------- */
-const sectionsEl = document.getElementById("sections"), panel = document.getElementById("panel"), labelsEl = document.getElementById("labels"), tip = document.getElementById("tip");
+const dockEl = document.getElementById("dock"), sectionsEl = document.getElementById("sections"), panel = document.getElementById("panel"), labelsEl = document.getElementById("labels"), tip = document.getElementById("tip");
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function renderSections() {
-  const btn = (id, name, color, key) => `<button data-id="${id}" aria-pressed="false" title="Shortcut: ${key}">${color ? `<span class="swatch" style="background:${color}"></span>` : ""}${name}</button>`;
-  sectionsEl.innerHTML = btn("all", "View all", null, "0") + ZONES.map(z => btn(z.id, z.name, z.color, z.key)).join("");
+  const btn = (id, name, color, key) => `<button data-id="${id}" aria-pressed="false" title="Shortcut: ${key}" style="--c:${color || "var(--accent)"}"><span class="dot"></span><span>${name}</span><kbd>${key}</kbd></button>`;
+  sectionsEl.innerHTML = `<span class="nav-ind" aria-hidden="true"></span>` + btn("all", "View all", null, "0") + ZONES.map(z => btn(z.id, z.name, z.color, z.key)).join("");
   sectionsEl.addEventListener("click", e => { const b = e.target.closest("button"); if (b) setFocus(b.dataset.id); });
+}
+/* Sliding highlight behind the active section. */
+function moveNavInd() {
+  const b = sectionsEl.querySelector('button[aria-pressed="true"]'), ind = sectionsEl.querySelector(".nav-ind");
+  if (!b || !ind) return;
+  ind.style.transform = `translateY(${b.offsetTop}px)`; ind.style.height = b.offsetHeight + "px";
+  ind.style.setProperty("--c", current === "all" ? "var(--accent)" : Z[current].color);
 }
 function renderPanel() {
   const guessNote = `<p class="guess">Placement is a first guess. Send the floor plan and this zone will be moved to match.</p>`;
-  const dataNote = `<p class="notes">Hover data: <b>${esc(DATA.source || "Unknown source")}</b>${DATA.asOf ? `, as of ${esc(fmtTime(DATA.asOf))}` : ""}. It comes from <code>js/sample-data.js</code>.</p>`;
+  const dataNote = `<p class="notes">Data: <b>${esc(DATA.source || "Unknown source")}</b>${DATA.asOf ? `, as of ${esc(fmtTime(DATA.asOf))}` : ""}, from <code>js/sample-data.js</code>.</p>`;
   if (current === "all") {
     const totals = [["Bay doors", D.count], ["Despatch lines", DS.lines], ["Chutes", CV.chutes], ["Pack benches", CV.chutes * CV.benchesPerChute]];
     panel.innerHTML = `<div><div class="kicker">Whole site</div><h2>${esc(C.site.name)}</h2>
       <p class="blurb">Single floor, about ${Math.round(BW)} × ${Math.round(BD)} m. All bay doors are on the west wall, on the left of the view.</p></div>
-      <div><h3>Headline counts</h3><div class="stats">${totals.map(([l, v]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("")}</div></div>
-      <div><h3>Sections</h3><ul class="zlist">${ZONES.map(z => `<li><button data-id="${z.id}"><span class="swatch" style="background:${z.color}"></span><span>${z.name}${C[z.id] && C[z.id].guess ? ` <span style="color:var(--accent-ink);font-family:var(--f-mono);font-size:11px">guess</span>` : ""}</span><span class="n">${Math.round(z.box.x1 - z.box.x0)}×${Math.round(z.box.z1 - z.box.z0)} m</span></button></li>`).join("")}</ul></div>
+      <div><h3>Headline counts</h3><div class="stats">${totals.map(([l, v]) => `<div class="stat"><b data-count="${v}">${v}</b><span>${l}</span></div>`).join("")}</div></div>
+      <p class="notes">Pick a section on the left, or a card along the bottom. Hover or click a cage, pallet or pack bench for its details. Drag to orbit, scroll to zoom, right-drag to pan, keys 0–6 switch section.</p>
       <p class="notes">Doors ${doorsIn > 1 ? "1–" + doorsIn : "1"} are shown as inbound and the rest as despatch. That split is a guess. All counts live in <code>js/layout-config.js</code>.</p>${dataNote}`;
-    panel.querySelectorAll(".zlist button").forEach(b => b.addEventListener("click", () => setFocus(b.dataset.id)));
-    return;
+  } else {
+    const z = Z[current], cfg = C[current] || {};
+    panel.innerHTML = `<button class="btn back" id="back-all">← Back to view all</button>
+      <div><div class="kicker"><span class="swatch" style="background:${z.color};color:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[current]}</p></div>
+      <div><h3>In this section</h3><div class="stats">${z.stats.map(([l, v]) => `<div class="stat"><b${typeof v === "number" ? ` data-count="${v}"` : ""}>${v}</b><span>${l}</span></div>`).join("")}</div></div>
+      ${current === "conveyor" ? `<p class="notes">Today's output by grade and route is in the cards along the bottom. Click a pack bench to see its own output.</p>` : ""}
+      ${cfg.guess ? guessNote : ""}
+      ${current === "inbound" || current === "despatch" || current === "conveyor" ? dataNote : `<p class="notes">Area about ${Math.round(z.box.x1 - z.box.x0)} × ${Math.round(z.box.z1 - z.box.z0)} m. Fill levels are illustrative until live data is connected.</p>`}`;
+    panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
   }
-  const z = Z[current], cfg = C[current] || {};
-  panel.innerHTML = `<button class="btn back" id="back-all">← Back to view all</button>
-    ${current === "conveyor" ? convOutputHTML() : ""}
-    <div><div class="kicker"><span class="swatch" style="background:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[current]}</p></div>
-    <div><h3>In this section</h3><div class="stats">${z.stats.map(([l, v]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("")}</div></div>
-    ${cfg.guess ? guessNote : ""}
-    ${current === "inbound" || current === "despatch" || current === "conveyor" ? dataNote : `<p class="notes">Area about ${Math.round(z.box.x1 - z.box.x0)} × ${Math.round(z.box.z1 - z.box.z0)} m. Fill levels are illustrative until live data is connected.</p>`}`;
-  panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
+  [...panel.children].forEach((c, i) => c.style.setProperty("--i", i));
+  panel.scrollTop = 0;
+  countUp(panel);
 }
-/* Conveyor day output, summed from the bench records. */
-function convOutputHTML() {
+/* Numbers count up from zero when a card appears. */
+function countUp(root) {
+  const els = [...root.querySelectorAll("[data-count]")];
+  if (reduceMotion || !els.length) return;
+  const t0 = performance.now(), D_MS = 900;
+  els.forEach(el => el.textContent = "0");
+  const step = now => {
+    const k = Math.min(1, (now - t0) / D_MS), e = 1 - (1 - k) ** 3;
+    for (const el of els) el.textContent = n0(Math.round(+el.dataset.count * e));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+/* Arrivals per hour as small columns. */
+function hourly(times) {
+  const asOf = new Date(DATA.asOf || Date.now()), hrs = times.map(t => new Date(t)).filter(d => !isNaN(d)).map(d => d.getHours());
+  const to = asOf.getHours(), from = Math.min(to, ...hrs), a = Array(to - from + 1).fill(0);
+  for (const h of hrs) if (h >= from && h <= to) a[h - from]++;
+  return { a, from, to };
+}
+function colsHTML({ a, from, to }, what) {
+  const max = Math.max(1, ...a), hh = h => String(h).padStart(2, "0") + ":00";
+  return `<div class="cols" role="img" aria-label="${what} per hour, ${hh(from)} to ${hh(to)}, peak ${max}">${a.map((v, j) => `<span style="height:${(100 * v / max).toFixed(1)}%;--j:${j}" title="${hh(from + j)}: ${v}"></span>`).join("")}</div>
+    <div class="axis"><span>${hh(from)}</span><span>${hh(to)}</span></div>`;
+}
+/* Bottom dock: today's numbers for inbound, conveyor output (grade and route) and despatch. */
+function renderDock() {
+  const cages = DATA.inboundCages, pals = DATA.despatchPallets, benches = DATA.benchOutput;
+  const units = list => list.reduce((a, r) => a + (r.skus || []).reduce((b, s) => b + (+s.qty || 0), 0), 0);
+  const skus = new Set(cages.flatMap(c => (c.skus || []).map(s => s.sku))).size;
+  const lastIn = cages.map(c => c.deliveredAt).sort().pop();
   const g = { A: 0, B: 0, C: 0 }, r = {};
   let open = 0;
-  for (const b of DATA.benchOutput) {
+  for (const b of benches) {
     for (const k in g) g[k] += +(b.grades || {})[k] || 0;
     for (const [n, v] of Object.entries(b.routes || {})) r[n] = (r[n] || 0) + (+v || 0);
     if (b.status && b.status !== "Closed") open++;
   }
-  const total = sum(g);
-  if (!DATA.benchOutput.length) return `<p class="notes">No bench output data loaded.</p>`;
-  return `<div><h3>Today's output</h3><div class="hero"><b>${n0(total)}</b><span>units packed${DATA.asOf ? " by " + esc(fmtTime(DATA.asOf).split(", ").pop()) : ""} · ${open} of ${DATA.benchOutput.length} benches open</span></div></div>
-    <div><h3>By grade</h3>${gradeBlock(g)}</div>
-    <div><h3>By despatch route</h3>${routeBlock(r)}</div>
-    <p class="notes">Click a pack bench to see its own output.</p>`;
+  const totes = pals.reduce((a, p) => a + (+p.totes || 0), 0), lanes = new Set(pals.map(p => p.lane)).size;
+  const hm = s => s ? esc(fmtTime(s).split(", ").pop()) : "–";
+  const card = (id, cls, c, label, body) => `<div class="kpi glass ${cls}" role="button" tabindex="0" data-id="${id}" style="--c:${c}" aria-label="${label}: open ${Z[id].name}">
+      <div class="kh"><span class="dot"></span>${label}<span class="t">Today</span></div>${body}</div>`;
+  const cards = [
+    card("inbound", "", Z.inbound.color, "Inbound", `<b class="big" data-count="${cages.length}">${n0(cages.length)}</b>
+      <div class="sub">cages received · <b>${n0(units(cages))}</b> units · <b>${n0(skus)}</b> SKUs · last at <b>${hm(lastIn)}</b></div>
+      ${colsHTML(hourly(cages.map(c => c.deliveredAt)), "Cages delivered")}`),
+    card("conveyor", "", Z.conveyor.color, "Conveyor output", benches.length ? `<b class="big" data-count="${sum(g)}">${n0(sum(g))}</b>
+      <div class="sub">units packed · <b>${open}</b> of ${benches.length} benches open</div>${gradeBlock(g)}` : `<div class="sub">No bench output data loaded.</div>`),
+    card("conveyor", "routes", Z.conveyor.color, "Output by despatch route", routeBlock(r)),
+    card("despatch", "", Z.despatch.color, "Despatch", `<b class="big" data-count="${pals.length}">${n0(pals.length)}</b>
+      <div class="sub">pallets built · <b>${n0(totes)}</b> totes · <b>${n0(units(pals))}</b> units · <b>${lanes}</b> of ${DS.lines} lanes</div>
+      ${colsHTML(hourly(pals.map(p => p.builtAt)), "Pallets built")}`)
+  ];
+  dockEl.innerHTML = cards.join("");
+  [...dockEl.children].forEach((c, i) => c.style.setProperty("--i", i));
+  dockEl.querySelectorAll("ul.bars li").forEach((li, j) => li.style.setProperty("--j", j));
+  dockEl.addEventListener("click", e => { const k = e.target.closest(".kpi"); if (k) setFocus(k.dataset.id); });
+  dockEl.addEventListener("keydown", e => { const k = e.target.closest(".kpi"); if (k && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setFocus(k.dataset.id); } });
+  countUp(dockEl);
 }
 function makeLabels() {
   for (const z of ZONES) {
@@ -998,9 +1063,11 @@ renderer.domElement.addEventListener("pointerup", e => {
 controls.addEventListener("start", () => setHover(-1));
 
 function applyTheme() {
-  scene.background = new T.Color(css("--scene"));
-  greyCol.set(css("--dim"));
-  if (shell) { shell.floorMat.color.set(css("--floor")); shell.wallMat.color.set(css("--wall")); }
+  // Dark mode reads its navy tones as screen colours (sRGB) so they stay deep after lighting.
+  const col = n => { const c = new T.Color(css(n)); return isDark() ? c.convertSRGBToLinear().multiplyScalar(1.6) : c; };
+  scene.background = col("--scene");
+  greyCol.copy(col("--dim"));
+  if (shell) { shell.floorMat.color.copy(col("--floor")); shell.wallMat.color.copy(col("--wall")); }
   if (shell) recolour();
   dispatchEvent(new CustomEvent("asc-map-theme"));
   const dark = isDark();
@@ -1010,7 +1077,10 @@ function applyTheme() {
 }
 function resize() {
   const w = viewport.clientWidth, h = viewport.clientHeight;
-  renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix(); invalidate();
+  renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h);
+  inset = hudInsets();
+  if (inset.l || inset.r || inset.b) camera.setViewOffset(w, h, (inset.r - inset.l) / 2, inset.b / 2, w, h); else camera.clearViewOffset();
+  camera.updateProjectionMatrix(); moveNavInd(); invalidate();
 }
 
 /* ---------- Start ---------- */
@@ -1018,8 +1088,9 @@ renderSections();
 requestAnimationFrame(() => {
   shell = build();
   makeLabels();
+  renderDock();
   resize();
-  scene.background = new T.Color(css("--scene")); greyCol.set(css("--dim"));
+  applyTheme();
   const start = location.hash.slice(1);
   setFocus(Z[start] ? start : "all", true);
   document.getElementById("loading").hidden = true;
@@ -1048,6 +1119,7 @@ requestAnimationFrame(() => {
   });
 });
 new ResizeObserver(() => { resize(); }).observe(viewport);
+if (document.fonts) document.fonts.ready.then(() => { resize(); if (shell) flyTo(current === "all" ? ALL : Z[current].box, true); });
 /* Light / dark toggle. Follows the system until the viewer picks one; the pick is remembered on this device. */
 const darkMQ = matchMedia("(prefers-color-scheme: dark)");
 const isDark = () => { const t = document.documentElement.dataset.theme; return t ? t === "dark" : darkMQ.matches; };

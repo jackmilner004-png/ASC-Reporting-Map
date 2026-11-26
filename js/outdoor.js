@@ -86,12 +86,14 @@ function start() {
   // Theme and focus: darker in dark mode; muted while a section is focused
   let focus = A.current(), dark = false;
   const grey = new T.Color("#9aa1a8");
+  // Dark mode: deep navy night palette to match the glass UI
+  const night = { grass: "#0f1b26", tarmac: "#1b2536", road: "#141c2a", trailer: "#6f7d92", leaf: "#16303a", leaf2: "#1b3a44" };
+  const nightC = Object.fromEntries(Object.entries(night).map(([k, v]) => [k, new T.Color(v).convertSRGBToLinear()]));
   function paint() {
     dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
     for (const k of themed) {
-      M[k].color.copy(base[k]);
-      if (dark) M[k].color.multiplyScalar(0.6);
-      if (focus !== "all") M[k].color.lerp(dark ? grey.clone().multiplyScalar(0.35) : grey, 0.35);
+      M[k].color.copy(dark ? nightC[k] : base[k]);
+      if (focus !== "all") M[k].color.lerp(dark ? grey.clone().multiplyScalar(0.25) : grey, 0.35);
     }
     A.invalidate();
   }

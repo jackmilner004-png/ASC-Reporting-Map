@@ -16,7 +16,8 @@ Opening the file straight from disk (`file://`) also works in most browsers.
 - Drag to orbit, scroll or pinch to zoom, right-drag to pan. "Reset view" goes back to the framed shot.
 - A link can open a section directly, e.g. `index.html#conveyor`.
 - Hover an inbound roll cage or a despatch pallet: it lifts slightly and a short card shows where it came from or is going. Click it to pop it out and open the full card with every SKU. On a touch screen, tap.
-- Click a conveyor pack bench to see its output today, split by grade (A, B, C) and despatch route. The Conveyor processing panel shows the same split for the whole day.
+- Click a conveyor pack bench to see its output today, split by grade (A, B, C) and despatch route. The cards along the bottom show the whole day: inbound cages by hour, conveyor output by grade and by despatch route, and despatch pallets by hour. Click a card to jump to its section.
+- Layout: the map fills the screen with glass panels over it. Section navigation is on the left, the section detail is on the right, and today's numbers sit along the bottom. Dark mode uses a deep navy palette. On phones the panels stack under the map.
 
 ## Hover data
 

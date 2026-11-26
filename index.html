@@ -11,32 +11,39 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div class="app">
-  <header class="top">
-    <div class="brand">
+<main class="app">
+  <!-- The 3D map fills the screen; everything else floats over it as glass panels. -->
+  <section class="stage" aria-label="3D warehouse view">
+    <div id="viewport"></div>
+    <div id="labels" aria-hidden="true"></div>
+    <div class="tip glass" id="tip" role="tooltip" hidden></div>
+    <div class="tip card glass" id="card" role="dialog" aria-label="Item details" hidden></div>
+    <div class="loading" id="loading">Building the warehouse…</div>
+  </section>
+
+  <!-- Left: brand and section navigation -->
+  <aside class="rail left" id="rail">
+    <div class="brand glass">
       <h1>ASC Reporting Map</h1>
-      <p id="subtitle">Single-floor layout, v0.1. Counts come from <code>js/layout-config.js</code>.</p>
+      <p id="subtitle">Returns centre · layout v0.2</p>
     </div>
-    <nav class="sections" id="sections" aria-label="Sections"></nav>
-  </header>
-  <main class="layout">
-    <section class="stage" aria-label="3D warehouse view">
-      <div id="viewport"></div>
-      <div id="labels" aria-hidden="true"></div>
-      <div class="tip" id="tip" role="tooltip" hidden></div>
-      <div class="tip card" id="card" role="dialog" aria-label="Item details" hidden></div>
-      <div class="toolbar">
-        <button class="btn" id="btn-yard" aria-pressed="true" hidden>Yard</button>
-        <button class="btn" id="btn-theme">Light mode</button>
-        <button class="btn" id="btn-labels" aria-pressed="true">Labels</button>
-        <button class="btn" id="btn-reset">Reset view</button>
-      </div>
-      <div class="hint">Drag to orbit · scroll or pinch to zoom · right-drag to pan · hover or click a cage, pallet or pack bench · keys 0–6 switch section</div>
-      <div class="loading" id="loading">Building the warehouse…</div>
-    </section>
-    <aside class="panel" id="panel" aria-live="polite"></aside>
-  </main>
-</div>
+    <nav class="sections glass" id="sections" aria-label="Sections"></nav>
+  </aside>
+
+  <!-- Right: view controls and section detail -->
+  <aside class="rail right" id="rail-right">
+    <div class="toolbar glass">
+      <button class="btn" id="btn-yard" aria-pressed="true" hidden>Yard</button>
+      <button class="btn" id="btn-theme">Light mode</button>
+      <button class="btn" id="btn-labels" aria-pressed="true">Labels</button>
+      <button class="btn" id="btn-reset">Reset view</button>
+    </div>
+    <div class="detail glass" id="panel" aria-live="polite"></div>
+  </aside>
+
+  <!-- Bottom: today's numbers -->
+  <section class="dock" id="dock" aria-label="Today's numbers"></section>
+</main>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
