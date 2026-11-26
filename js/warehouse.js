@@ -801,12 +801,14 @@ function expandWide() {
   renderPanel();
 }
 function hudInsets() {
-  const dk = document.getElementById("dock");
-  if (!dk || getComputedStyle(dk).position !== "absolute") return { l: 0, r: 0, b: 0 };
+  const dk = document.getElementById("dock"), sd = document.getElementById("dock-stock");
+  if (!dk || getComputedStyle(dk).position !== "absolute" && getComputedStyle(sd).position !== "absolute") return { l: 0, r: 0, b: 0 };
   // Measured from layout sizes, not live rectangles, so a panel mid-transition can't skew the framing.
-  // The wide stock panel slides over the view, so those sections are framed as usual (zoomed in).
+  // Storage sections frame their area in the space left of the half-width pop-out, above the stock cards.
   const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), gap = 16;
-  return { l: Math.max(0, L.right - st.left), r: parseFloat(css("--right-w")) + 2 * gap, b: dk.offsetHeight + gap };
+  const l = Math.max(0, L.right - st.left);
+  if (WIDE.has(current)) return { l, r: Math.round(viewport.clientWidth / 2) + gap, b: sd.offsetHeight + gap };
+  return { l, r: parseFloat(css("--right-w")) + 2 * gap, b: dk.offsetHeight + gap };
 }
 function viewFor(b) {
   const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, sx = b.x1 - b.x0, sz = b.z1 - b.z0;
@@ -845,8 +847,12 @@ let current = "all", greyCol = new T.Color(), shell;
 function setFocus(id, instant) {
   current = id;
   // Storage sections: zoom in first, then the wide panel expands (see expandWide)
-  document.querySelector(".app").classList.remove("wide");
+  const app = document.querySelector(".app");
+  app.classList.remove("wide"); setMini(false);
   pendingWide = WIDE.has(id) ? id : null;
+  // Storage sections swap the bottom cards for their stockholding cards (left of the pop-out)
+  app.classList.toggle("stockmode", WIDE.has(id));
+  if (WIDE.has(id)) renderStockDock(id);
   resize();
   recolour();
   dispatchEvent(new CustomEvent("asc-map-focus", { detail: id }));
@@ -962,7 +968,7 @@ function stockModel(kind) {
     m = {
       rows, ownerTypes: ["jobber", "dropship", "consumables"], idLabel: "Pallet", hasTote: true,
       cards: [
-        { t: "jobber", label: "Jobber · grade C", big: units(J), unit: "units", sub: `<b>${J.length}</b> red tote pallets · <b>${n0(totes(J))}</b> totes` },
+        { t: "jobber", label: "Jobber", big: units(J), unit: "units", sub: `grade C · <b>${J.length}</b> red tote pallets · <b>${n0(totes(J))}</b> totes` },
         { t: "dropship", label: "Dropship vendors", big: units(Dp), unit: "units", sub: `<b>${Dp.length}</b> pink tote pallets · <b>${n0(totes(Dp))}</b> totes · <b>${vendors}</b> vendors` },
         { t: "consumables", label: "Consumables", big: units(Cn), unit: "cases", sub: `<b>${Cn.length}</b> pallets · <b>${new Set(lines(Cn).map(l => l.sku)).size}</b> product lines` },
         { t: "cap", label: "Racking capacity", big: P.length, of: cap, unit: "pallets", segs: [["jobber", J.length], ["dropship", Dp.length], ["consumables", Cn.length]], sub: `<b>${pct(P.length, cap)}</b> full · <b>${n0(cap - P.length)}</b> free spaces` }
@@ -984,7 +990,7 @@ function stockModel(kind) {
     m = {
       rows, ownerTypes: ["jobber", "dropship"], idLabel: "Garment ID", hasTote: false,
       cards: [
-        { t: "jobber", label: "Jobber · grade C", big: J.length, unit: "garments", sub: `<b>${new Set(J.map(g => g.sku)).size}</b> SKUs` },
+        { t: "jobber", label: "Jobber", big: J.length, unit: "garments", sub: `grade C · <b>${new Set(J.map(g => g.sku)).size}</b> SKUs` },
         { t: "dropship", label: "Dropship vendors", big: Dp.length, unit: "garments", sub: `<b>${vendors}</b> vendors · <b>${new Set(Dp.map(g => g.sku)).size}</b> SKUs` },
         { t: "total", label: "Total hanging stock", big: G.length, unit: "garments", sub: `on <b>${rails}</b> rails` },
         { t: "cap", label: "Rail capacity", big: G.length, of: cap, unit: "slots", segs: [["jobber", J.length], ["dropship", Dp.length]], sub: `<b>${pct(G.length, cap)}</b> full · <b>${n0(cap - G.length)}</b> free slots` }
@@ -999,20 +1005,34 @@ function stockModel(kind) {
   }
   return (stockCache[kind] = m);
 }
-function stockPanelHTML(kind) {
+/* Stockholding cards along the bottom, left of the pop-out, in the same format as the home cards. */
+const stockDockEl = document.getElementById("dock-stock");
+let stockDockFor = null;
+function renderStockDock(kind) {
+  if (stockDockFor === kind) return;
+  stockDockFor = kind;
   const z = Z[kind], m = stockModel(kind);
-  const card = c => {
+  stockDockEl.innerHTML = m.cards.map((c, i) => {
     const col = STOCK_COL[c.t] || z.color;
     const seg = c.segs ? `<div class="seg-bar cap" role="img" aria-label="${c.segs.map(([t, v]) => `${STOCK_NAME[t]} ${v}`).join(", ")}, free ${c.of - c.big}">${c.segs.map(([t, v]) => v ? `<span style="flex:${v};background:${STOCK_COL[t]}" title="${STOCK_NAME[t]}: ${v}"></span>` : "").join("")}<span class="free" style="flex:${Math.max(0, c.of - c.big)}"></span></div>` : "";
-    return `<div class="scard" style="--c:${col}"><div class="kh"><span class="dot"></span>${c.label}</div>
-      <div class="big"><b data-count="${c.big}">${n0(c.big)}</b>${c.of ? `<span class="of"> / ${n0(c.of)}</span>` : ""} <span class="u">${c.unit}</span></div>${seg}<div class="sub">${c.sub}</div></div>`;
-  };
+    return `<div class="kpi glass" role="button" tabindex="0" style="--c:${col};--i:${i}"><div class="kh"><span class="dot"></span>${c.label}</div>
+      <div><b class="big" data-count="${c.big}">${n0(c.big)}</b>${c.of ? `<span class="of"> / ${n0(c.of)}</span>` : ""}</div>
+      <div class="sub">${c.unit}${c.sub ? " · " + c.sub : ""}</div>${seg}</div>`;
+  }).join("");
+  countUp(stockDockEl);
+}
+stockDockEl.addEventListener("click", e => {
+  const k = e.target.closest(".kpi"); if (!k) return;
+  const part = e.target.closest(".seg-bar span");
+  if (part) selectPart(k, part); else replay(k);
+});
+function stockPanelHTML(kind) {
+  const z = Z[kind], m = stockModel(kind);
   const chips = [["all", "All"], ...m.ownerTypes.map(t => [t, STOCK_NAME[t]])];
   const cols = [["sku", "SKU"], ["desc", "Description"], ["qty", "Qty"], ["owner", "Stock"], ...(m.hasTote ? [["tote", "Tote ID"]] : []), ["pallet", m.idLabel], ["loc", "Location"], ["delivered", "Delivered to site"], ["scanned", "Scanned into location"]];
-  return `<button class="btn back" id="back-all">← Back to view all</button>
+  return `<div class="sp-bar"><button class="btn back" id="back-all">← Back to view all</button><button class="btn back" id="sp-min" title="Hide the panel and keep the zoomed view">Minimise panel →</button></div>
     <div class="sp-head"><div><div class="kicker"><span class="swatch" style="background:${z.color};color:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[kind]}</p></div>
       <p class="notes">${esc(DATA.source || "Sample data")}${DATA.stock.asOf ? `, as of ${esc(fmtTime(DATA.stock.asOf))}` : ""}. From <code>js/sample-stock.js</code>.</p></div>
-    <div class="sp-cards">${m.cards.map(card).join("")}</div>
     <div class="sp-charts">${m.charts.map(c => `<div class="cbox${c.wide ? " wide" : ""}" style="--c:${z.color}"><h3>${c.title}</h3><div class="${/class="cols/.test(c.body) ? "" : "scroll"}">${c.body}</div></div>`).join("")}</div>
     <div class="sp-table">
       <div class="sp-tools"><h3>Stock detail</h3>
@@ -1050,7 +1070,15 @@ function wireStockPanel(kind) {
   body.addEventListener("keydown", e => { const tr = e.target.closest("tr[data-ref]"); if (tr && e.key === "Enter") openRef(tr); });
   draw();
   panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
+  panel.querySelector("#sp-min").addEventListener("click", () => setMini(true));
 }
+/* Minimise: hide the pop-out but stay zoomed into the storage area. */
+function setMini(on) {
+  document.querySelector(".app").classList.toggle("mini", on);
+  document.getElementById("btn-panel").hidden = !on;
+  if (on) document.getElementById("btn-panel").focus();
+}
+document.getElementById("btn-panel").addEventListener("click", () => setMini(false));
 const HOVER_BY_REF = new Map();
 
 /* Charts animate again when clicked. A click on one column, bar or grade picks it out and shows its value. */
