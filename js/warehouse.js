@@ -657,6 +657,7 @@ viewport.appendChild(renderer.domElement);
 const scene = new T.Scene();
 const camera = new T.PerspectiveCamera(38, 1, 0.5, 1000);
 const controls = new T.OrbitControls(camera, renderer.domElement);
+controls.enabled = false;                       // locked by default; the "Free camera" button unlocks it
 controls.enableDamping = true; controls.dampingFactor = 0.1; controls.maxPolarAngle = PI * 0.47; controls.minDistance = 4; controls.maxDistance = 450;
 scene.add(new T.HemisphereLight(0xffffff, 0x8a8f94, 0.7));
 const sun = new T.DirectionalLight(0xffffff, 0.85);
@@ -704,6 +705,13 @@ function build() {
       const pts = [[r.x0, r.z0], [r.x1, r.z0], [r.x1, r.z1], [r.x0, r.z1]].map(([a, b]) => new T.Vector3(a, 0.03, b));
       const line = new T.LineLoop(new T.BufferGeometry().setFromPoints(pts), new T.LineBasicMaterial({ color: zdef.color, transparent: true, opacity: 0.7 }));
       world.add(line); zdef.tints.push(tint); zdef.lines.push(line);
+      // Glowing outline shown when the area is hovered or focused: four thin strips in the zone colour
+      zdef.glowMat = zdef.glowMat || new T.MeshBasicMaterial({ color: zdef.color, transparent: true, opacity: 0, depthWrite: false });
+      const t = 0.35, y = 0.06;
+      for (const [sx, sz, cx, cz] of [[w + t, t, r.x0 + w / 2, r.z0], [w + t, t, r.x0 + w / 2, r.z1], [t, d + t, r.x0, r.z0 + d / 2], [t, d + t, r.x1, r.z0 + d / 2]]) {
+        const g = new T.Mesh(new T.BoxGeometry(sx, 0.04, sz), zdef.glowMat); g.position.set(cx, y, cz); g.renderOrder = 2; g.visible = false; world.add(g);
+        (zdef.glow = zdef.glow || []).push(g);
+      }
     }
     zdef.stats = stats[zdef.id];
   }
@@ -754,11 +762,24 @@ function viewFor(b) {
   const dir = new T.Vector3(Math.sin(AZ) * Math.cos(EL), Math.sin(EL), Math.cos(AZ) * Math.cos(EL));
   return { target, pos: target.clone().addScaledVector(dir, dist) };
 }
-let tween = null;
+/* The camera holds a framed view (base) and only drifts a little with the pointer.
+   "Free camera" hands it back to orbit controls. */
+let tween = null, freeCam = false;
+const base = { pos: new T.Vector3(), target: new T.Vector3() };
+const par = { x: 0, y: 0, tx: 0, ty: 0 }, PAR_AZ = 0.045, PAR_EL = 0.03;   // radians at the screen edge (~2.5° and ~1.7°)
+const _sph = new T.Spherical(), _off = new T.Vector3();
+function applyCam() {
+  if (freeCam) { camera.position.copy(base.pos); controls.target.copy(base.target); controls.update(); return; }
+  _off.subVectors(base.pos, base.target); _sph.setFromVector3(_off);
+  _sph.theta -= par.x * PAR_AZ; _sph.phi = Math.min(PI * 0.47, Math.max(0.1, _sph.phi + par.y * PAR_EL));
+  camera.position.copy(base.target).add(_off.setFromSpherical(_sph));
+  controls.target.copy(base.target); camera.lookAt(base.target);
+}
 function flyTo(b, instant) {
   const v = viewFor(b);
-  if (instant || reduceMotion) { camera.position.copy(v.pos); controls.target.copy(v.target); controls.update(); invalidate(); return; }
-  tween = { t: 0, p0: camera.position.clone(), t0: controls.target.clone(), p1: v.pos, t1: v.target };
+  if (freeCam) { base.pos.copy(camera.position); base.target.copy(controls.target); }
+  if (instant || reduceMotion) { base.pos.copy(v.pos); base.target.copy(v.target); tween = null; applyCam(); invalidate(); return; }
+  tween = { t: 0, p0: base.pos.clone(), t0: base.target.clone(), p1: v.pos, t1: v.target };
   invalidate();
 }
 
@@ -778,20 +799,28 @@ function setFocus(id, instant) {
   invalidate();
 }
 /* Grey out every zone except the focused one (colour only, keeps the camera where it is). */
+let hoverZone = null;
 function recolour() {
   const id = current;
   for (const z of ZONES) {
-    const dim = id !== "all" && z.id !== id, on = z.id === id;
+    const on = z.id === id, hot = z.id === hoverZone && !on, dim = id !== "all" && !on;
     for (const r of zoneMats[z.id]) {
       const m = r.mat;
-      if (dim) { m.color.copy(r.color).lerp(greyCol, r.map ? 0.65 : 0.8); if (r.emissive) m.emissive.setRGB(0, 0, 0); }
-      else { m.color.copy(r.color); if (r.emissive) m.emissive.copy(r.emissive); }
+      if (dim) { m.color.copy(r.color).lerp(greyCol, hot ? 0.35 : r.map ? 0.65 : 0.8); if (r.emissive) m.emissive.setRGB(0, 0, 0); }
+      else { m.color.copy(r.color); if (hot) m.color.multiplyScalar(1.18); if (r.emissive) m.emissive.copy(r.emissive); }
     }
-    z.tints.forEach(t => t.material.opacity = dim ? 0.04 : on ? 0.3 : 0.16);
-    z.lines.forEach(l => l.material.opacity = dim ? 0.15 : 1);
-    z.label.classList.toggle("dim", dim);
+    z.tints.forEach(t => t.material.opacity = hot ? 0.42 : dim ? 0.04 : on ? 0.3 : 0.16);
+    z.lines.forEach(l => l.material.opacity = hot || !dim ? 1 : 0.15);
+    z.glowMat.opacity = hot ? 0.95 : on ? 0.6 : 0;
+    z.glow.forEach(g => g.visible = hot || on);
+    z.label.classList.toggle("dim", dim && !hot);
+    z.label.classList.toggle("hot", hot);
   }
   invalidate();
+}
+function setHoverZone(id) {
+  if (id === hoverZone) return;
+  hoverZone = id; recolour();
 }
 
 /* ---------- UI ---------- */
@@ -817,7 +846,7 @@ function renderPanel() {
     panel.innerHTML = `<div><div class="kicker">Whole site</div><h2>${esc(C.site.name)}</h2>
       <p class="blurb">Single floor, about ${Math.round(BW)} × ${Math.round(BD)} m. All bay doors are on the west wall, on the left of the view.</p></div>
       <div><h3>Headline counts</h3><div class="stats">${totals.map(([l, v]) => `<div class="stat"><b data-count="${v}">${v}</b><span>${l}</span></div>`).join("")}</div></div>
-      <p class="notes">Pick a section on the left, or a card along the bottom. Hover or click a cage, pallet or pack bench for its details. Drag to orbit, scroll to zoom, right-drag to pan, keys 0–6 switch section.</p>
+      <p class="notes">Pick a section on the left, or a card along the bottom. Hover or click a cage, pallet or pack bench for its details. Hover an area to light it up, click it to open that section. Keys 0–6 also switch section. Turn on Orbit to rotate, zoom and pan freely.</p>
       <p class="notes">Doors ${doorsIn > 1 ? "1–" + doorsIn : "1"} are shown as inbound and the rest as despatch. That split is a guess. All counts live in <code>js/layout-config.js</code>.</p>${dataNote}`;
   } else {
     const z = Z[current], cfg = C[current] || {};
@@ -832,6 +861,27 @@ function renderPanel() {
   [...panel.children].forEach((c, i) => c.style.setProperty("--i", i));
   panel.scrollTop = 0;
   countUp(panel);
+}
+/* Charts animate again when clicked. A click on one column, bar or grade picks it out and shows its value. */
+function restartAnim(el) { if (!el) return; el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
+function clearSel(k) { k.classList.remove("has-sel"); k.querySelectorAll(".sel").forEach(x => x.classList.remove("sel")); const r = k.querySelector(".read"); if (r) r.textContent = ""; }
+function flash(k) { k.classList.remove("flash"); void k.offsetWidth; k.classList.add("flash"); }
+function replay(k) {
+  clearSel(k); flash(k);
+  k.querySelectorAll(".cols span, .bt span, .seg-bar").forEach(restartAnim);
+  countUp(k);
+}
+function selectPart(k, part) {
+  const was = part.classList.contains("sel");
+  clearSel(k);
+  if (was) return;
+  k.classList.add("has-sel"); part.classList.add("sel");
+  const g = part.dataset.g;
+  if (g) k.querySelectorAll(`[data-g="${g}"]`).forEach(x => x.classList.add("sel"));
+  if (part.matches(".cols span")) { restartAnim(part); const r = k.querySelector(".read"); if (r) r.textContent = part.dataset.r || ""; }
+  else if (part.matches("ul.bars li")) restartAnim(part.querySelector(".bt span"));
+  else { const seg = k.querySelector(".seg-bar"); seg && seg.querySelectorAll(".sel").forEach(restartAnim); }
+  flash(k);
 }
 /* Numbers count up from zero when a card appears. */
 function countUp(root) {
@@ -853,10 +903,10 @@ function hourly(times) {
   for (const h of hrs) if (h >= from && h <= to) a[h - from]++;
   return { a, from, to };
 }
-function colsHTML({ a, from, to }, what) {
+function colsHTML({ a, from, to }, what, unit) {
   const max = Math.max(1, ...a), hh = h => String(h).padStart(2, "0") + ":00";
-  return `<div class="cols" role="img" aria-label="${what} per hour, ${hh(from)} to ${hh(to)}, peak ${max}">${a.map((v, j) => `<span style="height:${(100 * v / max).toFixed(1)}%;--j:${j}" title="${hh(from + j)}: ${v}"></span>`).join("")}</div>
-    <div class="axis"><span>${hh(from)}</span><span>${hh(to)}</span></div>`;
+  return `<div class="cols" role="img" aria-label="${what} per hour, ${hh(from)} to ${hh(to)}, peak ${max}">${a.map((v, j) => `<span style="height:${(100 * v / max).toFixed(1)}%;--j:${j}" title="${hh(from + j)}: ${v}" data-r="${hh(from + j)} · ${v} ${unit}"></span>`).join("")}</div>
+    <div class="axis"><span>${hh(from)}</span><span class="read" aria-live="polite"></span><span>${hh(to)}</span></div>`;
 }
 /* Bottom dock: today's numbers for inbound, conveyor output (grade and route) and despatch. */
 function renderDock() {
@@ -878,18 +928,23 @@ function renderDock() {
   const cards = [
     card("inbound", "", Z.inbound.color, "Inbound", `<b class="big" data-count="${cages.length}">${n0(cages.length)}</b>
       <div class="sub">cages received · <b>${n0(units(cages))}</b> units · <b>${n0(skus)}</b> SKUs · last at <b>${hm(lastIn)}</b></div>
-      ${colsHTML(hourly(cages.map(c => c.deliveredAt)), "Cages delivered")}`),
+      ${colsHTML(hourly(cages.map(c => c.deliveredAt)), "Cages delivered", "cages")}`),
     card("conveyor", "", Z.conveyor.color, "Conveyor output", benches.length ? `<b class="big" data-count="${sum(g)}">${n0(sum(g))}</b>
       <div class="sub">units packed · <b>${open}</b> of ${benches.length} benches open</div>${gradeBlock(g)}` : `<div class="sub">No bench output data loaded.</div>`),
     card("conveyor", "routes", Z.conveyor.color, "Output by despatch route", routeBlock(r)),
     card("despatch", "", Z.despatch.color, "Despatch", `<b class="big" data-count="${pals.length}">${n0(pals.length)}</b>
       <div class="sub">pallets built · <b>${n0(totes)}</b> totes · <b>${n0(units(pals))}</b> units · <b>${lanes}</b> of ${DS.lines} lanes</div>
-      ${colsHTML(hourly(pals.map(p => p.builtAt)), "Pallets built")}`)
+      ${colsHTML(hourly(pals.map(p => p.builtAt)), "Pallets built", "pallets")}`)
   ];
   dockEl.innerHTML = cards.join("");
   [...dockEl.children].forEach((c, i) => c.style.setProperty("--i", i));
   dockEl.querySelectorAll("ul.bars li").forEach((li, j) => li.style.setProperty("--j", j));
-  dockEl.addEventListener("click", e => { const k = e.target.closest(".kpi"); if (k) setFocus(k.dataset.id); });
+  dockEl.addEventListener("click", e => {
+    const k = e.target.closest(".kpi"); if (!k) return;
+    const part = e.target.closest(".cols span, ul.bars li, ul.rows li, .seg-bar span");
+    if (part) selectPart(k, part); else replay(k);
+    if (k.dataset.id !== current) setFocus(k.dataset.id);
+  });
   dockEl.addEventListener("keydown", e => { const k = e.target.closest(".kpi"); if (k && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setFocus(k.dataset.id); } });
   countUp(dockEl);
 }
@@ -955,8 +1010,8 @@ const pct = (v, t) => t ? Math.round(100 * v / t) + "%" : "–";
 /* Grade split: thin segmented bar + one row per grade with swatch, units and share. */
 function gradeBlock(g) {
   const total = sum(g), keys = ["A", "B", "C"];
-  return `<div class="seg-bar" role="img" aria-label="Grade split: ${keys.map(k => `${k} ${pct(g[k], total)}`).join(", ")}">${keys.map(k => g[k] ? `<span class="g${k}" style="flex:${g[k]}"></span>` : "").join("")}</div>
-    <ul class="rows">${keys.map(k => `<li><span class="sw g${k}"></span><span>Grade ${k}</span><b>${n0(g[k])}</b><span class="pc">${pct(g[k], total)}</span></li>`).join("")}</ul>`;
+  return `<div class="seg-bar" role="img" aria-label="Grade split: ${keys.map(k => `${k} ${pct(g[k], total)}`).join(", ")}">${keys.map(k => g[k] ? `<span class="g${k}" data-g="${k}" style="flex:${g[k]}" title="Grade ${k}: ${n0(g[k])}"></span>` : "").join("")}</div>
+    <ul class="rows">${keys.map(k => `<li data-g="${k}"><span class="sw g${k}"></span><span>Grade ${k}</span><b>${n0(g[k])}</b><span class="pc">${pct(g[k], total)}</span></li>`).join("")}</ul>`;
 }
 /* Routes: ranked horizontal bars, one hue, largest first, figures beside each. */
 function routeBlock(r) {
@@ -1002,6 +1057,16 @@ function pickAt(cx, cy) {
   ray.setFromCamera(ndc, camera);
   for (const hit of ray.intersectObject(hitMesh, false)) { const h = hoverables[hit.instanceId]; if (current === "all" || current === h.zone) return hit.instanceId; }
   return -1;
+}
+const ground = new T.Plane(new T.Vector3(0, 1, 0), 0), _g = new T.Vector3();
+function zoneAt(cx, cy) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  if (!ray.ray.intersectPlane(ground, _g)) return null;
+  world.worldToLocal(_g);
+  for (const z of ZONES) for (const r of rects[z.id]) if (_g.x >= r.x0 && _g.x <= r.x1 && _g.z >= r.z0 && _g.z <= r.z1) return z.id;
+  return null;
 }
 function setHover(i, cx, cy) {
   if (i !== hovered) {
@@ -1051,14 +1116,25 @@ function placeCard() {
 }
 
 let pending = null;
-renderer.domElement.addEventListener("pointermove", e => { if (e.pointerType === "mouse" && !e.buttons) pending = [e.clientX, e.clientY]; });
-renderer.domElement.addEventListener("pointerleave", () => { pending = null; setHover(-1); });
+renderer.domElement.addEventListener("pointermove", e => {
+  if (e.pointerType !== "mouse") return;
+  if (!e.buttons) pending = [e.clientX, e.clientY];
+  const r = renderer.domElement.getBoundingClientRect();
+  par.tx = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1));
+  par.ty = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height) * 2 - 1));
+  invalidate();
+});
+renderer.domElement.addEventListener("pointerleave", () => { pending = null; setHover(-1); setHoverZone(null); par.tx = par.ty = 0; invalidate(); });
 let downAt = null;
 renderer.domElement.addEventListener("pointerdown", e => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener("pointerup", e => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) return;
   const i = pickAt(e.clientX, e.clientY);
-  if (i >= 0 && i !== selected) openCard(i); else closeCard();
+  if (i >= 0 && i !== selected) return openCard(i);
+  closeCard();
+  // Clicking the floor of another area opens that section
+  const zid = i < 0 ? zoneAt(e.clientX, e.clientY) : null;
+  if (zid && zid !== current) setFocus(zid);
 });
 controls.addEventListener("start", () => setHover(-1));
 
@@ -1103,12 +1179,23 @@ requestAnimationFrame(() => {
     if (tween) {
       tween.t = Math.min(1, tween.t + dt / 0.9);
       const k = tween.t < 0.5 ? 4 * tween.t ** 3 : 1 - (-2 * tween.t + 2) ** 3 / 2;
-      camera.position.lerpVectors(tween.p0, tween.p1, k); controls.target.lerpVectors(tween.t0, tween.t1, k);
+      base.pos.lerpVectors(tween.p0, tween.p1, k); base.target.lerpVectors(tween.t0, tween.t1, k);
       if (tween.t >= 1) tween = null;
-      dirty = true;
+      applyCam(); dirty = true;
     }
-    controls.update();                                  // fires "change" while damping settles
-    if (pending) { const [x, y] = pending; pending = null; setHover(pickAt(x, y), x, y); }
+    if (freeCam) controls.update();                     // fires "change" while damping settles
+    else if (Math.abs(par.tx - par.x) > 1e-4 || Math.abs(par.ty - par.y) > 1e-4) {
+      const k = reduceMotion ? 1 : Math.min(1, dt * 3);
+      par.x += (par.tx - par.x) * k; par.y += (par.ty - par.y) * k;
+      applyCam(); dirty = true;
+    }
+    if (pending) {
+      const [x, y] = pending; pending = null;
+      const i = pickAt(x, y); setHover(i, x, y);
+      const zid = i >= 0 ? hoverables[i].zone : zoneAt(x, y);
+      setHoverZone(zid);
+      if (i < 0) renderer.domElement.style.cursor = zid && zid !== current ? "pointer" : "";
+    }
     if (lifts.size && stepLifts(dt)) dirty = true;
     if (animate) { ticks.forEach(f => f(dt)); dirty = true; }
     if (!dirty) return;
@@ -1133,6 +1220,14 @@ document.getElementById("btn-theme").addEventListener("click", () => {
 });
 applyTheme();
 document.getElementById("btn-reset").addEventListener("click", () => flyTo(current === "all" ? ALL : Z[current].box));
+document.getElementById("btn-free").addEventListener("click", e => {
+  freeCam = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  e.currentTarget.setAttribute("aria-pressed", String(freeCam));
+  controls.enabled = freeCam;
+  if (freeCam) { controls.target.copy(base.target); controls.update(); }
+  else { base.pos.copy(camera.position); base.target.copy(controls.target); par.x = par.y = 0; flyTo(current === "all" ? ALL : Z[current].box); }
+  invalidate();
+});
 document.getElementById("btn-labels").addEventListener("click", e => {
   const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
   e.currentTarget.setAttribute("aria-pressed", String(on)); labelsEl.hidden = !on; invalidate();

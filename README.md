@@ -13,7 +13,8 @@ Opening the file straight from disk (`file://`) also works in most browsers.
 
 - The view opens as an eagle-eye shot from the door side of the building, angled down.
 - The buttons along the top frame one section and grey out the others: View all, Inbound, Conveyor processing, Manual processing, Hanging processing, Storage, Despatch. Keys 0–6 do the same.
-- Drag to orbit, scroll or pinch to zoom, right-drag to pan. "Reset view" goes back to the framed shot.
+- The camera stays on the framed view and drifts slightly with the pointer. Hovering an area lights it up in its colour with an outline; clicking it opens that section. "Orbit" unlocks free orbit, zoom and pan. "Reset" goes back to the framed shot.
+- Clicking a chart card replays its animation. Clicking one column, route bar or grade picks it out and shows its value.
 - A link can open a section directly, e.g. `index.html#conveyor`.
 - Hover an inbound roll cage or a despatch pallet: it lifts slightly and a short card shows where it came from or is going. Click it to pop it out and open the full card with every SKU. On a touch screen, tap.
 - Click a conveyor pack bench to see its output today, split by grade (A, B, C) and despatch route. The cards along the bottom show the whole day: inbound cages by hour, conveyor output by grade and by despatch route, and despatch pallets by hour. Click a card to jump to its section.

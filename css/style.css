@@ -89,7 +89,8 @@ code { font-family: var(--f-mono); font-size: 0.92em; }
 }
 
 /* ---------- Toolbar ---------- */
-.toolbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 5px; border-radius: 14px; }
+.toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px; padding: 5px; border-radius: 14px; }
+.toolbar .btn { padding: 5px 8px; }
 .btn { background: none; border: 1px solid transparent; border-radius: 10px; padding: 5px 10px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--muted); transition: background .2s, color .2s; }
 .btn:hover { color: var(--ink); background: var(--chip); }
 .btn[aria-pressed="true"] { color: var(--ink); background: var(--chip-on); border-color: var(--glass-line); }
@@ -124,6 +125,16 @@ h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing
 .kpi .big { font-family: var(--f-display); font-weight: 800; font-size: 32px; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .kpi .sub { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .kpi .sub b { color: var(--ink); font-family: var(--f-mono); font-weight: 600; }
+.kpi { position: relative; }
+.kpi.flash::after { content: ""; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; border: 1px solid var(--c); box-shadow: 0 0 26px color-mix(in srgb, var(--c) 55%, transparent), inset 0 0 18px color-mix(in srgb, var(--c) 18%, transparent); opacity: 0; animation: flash .8s ease-out; }
+.cols span, ul.bars li, ul.rows li, .seg-bar span { cursor: pointer; transition: opacity .25s, filter .25s; }
+.cols span:hover { opacity: 1; filter: brightness(1.15); }
+.has-sel .cols span:not(.sel), .has-sel ul.bars li:not(.sel), .has-sel ul.rows li:not(.sel), .has-sel .seg-bar span:not(.sel) { opacity: .3; }
+.cols span.sel { opacity: 1; filter: brightness(1.25) drop-shadow(0 0 6px var(--c)); }
+ul.bars li.sel .bn, ul.bars li.sel b, ul.rows li.sel { color: var(--ink); font-weight: 600; }
+ul.bars li.sel .bt span { filter: drop-shadow(0 0 5px var(--bar)); }
+.axis .read { color: var(--ink); font-weight: 600; }
+.zlabel.hot { border-color: var(--zc); box-shadow: 0 0 0 1px var(--zc), 0 0 18px color-mix(in srgb, var(--zc) 60%, transparent); transform-origin: bottom; }
 .cols { display: flex; align-items: flex-end; gap: 3px; height: 42px; margin-top: 2px; }
 .cols span { flex: 1; min-height: 2px; background: var(--c, var(--bar)); border-radius: 3px 3px 1px 1px; opacity: .85; transform-origin: bottom; animation: growY .8s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(200ms + var(--j, 0) * 25ms); }
 .axis { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 10px; color: var(--muted); }
@@ -188,6 +199,7 @@ ul.bars .bt span { display: block; height: 100%; background: var(--bar); border-
 @keyframes pop { from { opacity: 0; transform: scale(.96); } }
 @keyframes growX { from { transform: scaleX(0); } }
 @keyframes growY { from { transform: scaleY(0); } }
+@keyframes flash { 25% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
