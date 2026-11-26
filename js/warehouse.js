@@ -702,7 +702,7 @@ renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFShadowMap;
 renderer.shadowMap.autoUpdate = false;           // the scene is static: shadows are drawn once
 viewport.appendChild(renderer.domElement);
 const scene = new T.Scene();
-const camera = new T.PerspectiveCamera(38, 1, 0.5, 1000);
+const camera = new T.PerspectiveCamera(38, 1, 2, 1000)   // near plane at 2 m: more depth precision for floor paint;
 const controls = new T.OrbitControls(camera, renderer.domElement);
 controls.enabled = false;                       // locked by default; the "Free camera" button unlocks it
 controls.enableDamping = true; controls.dampingFactor = 0.1; controls.maxPolarAngle = PI * 0.47; controls.minDistance = 4; controls.maxDistance = 450;
@@ -724,7 +724,7 @@ function build() {
   flushInstances();
   const floorTex = canvasTex(256, 256, (g, w, h) => { g.fillStyle = "#ffffff"; g.fillRect(0, 0, w, h); g.fillStyle = "rgba(0,0,0,0.07)"; g.fillRect(0, 0, w, 3); g.fillRect(0, 0, 3, h); });
   floorTex.wrapS = floorTex.wrapT = T.RepeatWrapping; floorTex.repeat.set(BW / 6, BD / 6);
-  const floorMat = std(css("--floor"), { map: floorTex, roughness: 0.9 });
+  const floorMat = std(css("--floor"), { map: floorTex, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4 });
   const floor = new T.Mesh(new T.PlaneGeometry(BW, BD), floorMat);
   floor.rotation.x = -PI / 2; floor.position.set(BW / 2, 0, -BD / 2); floor.receiveShadow = true; world.add(floor);
   const wallMat = std(css("--wall"), { roughness: 0.9 }), wh = C.site.wallHeight, t = 0.3;
@@ -747,7 +747,8 @@ function build() {
     zdef.tints = []; zdef.lines = [];
     for (const r of rects[zdef.id]) {
       const w = r.x1 - r.x0, d = r.z1 - r.z0;
-      const tint = new T.Mesh(new T.PlaneGeometry(w, d), new T.MeshBasicMaterial({ color: zdef.color, transparent: true, opacity: 0.16, depthWrite: false }));
+      const tint = new T.Mesh(new T.PlaneGeometry(w, d), new T.MeshBasicMaterial({ color: zdef.color, transparent: true, opacity: 0.16, depthWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+      // polygonOffset keeps the tint just behind painted aprons and lane lines, so they never fight for the same pixels
       tint.rotation.x = -PI / 2; tint.position.set(r.x0 + w / 2, 0.004, r.z0 + d / 2); tint.renderOrder = -1; world.add(tint);
       const pts = [[r.x0, r.z0], [r.x1, r.z0], [r.x1, r.z1], [r.x0, r.z1]].map(([a, b]) => new T.Vector3(a, 0.03, b));
       const line = new T.LineLoop(new T.BufferGeometry().setFromPoints(pts), new T.LineBasicMaterial({ color: zdef.color, transparent: true, opacity: 0.7 }));
