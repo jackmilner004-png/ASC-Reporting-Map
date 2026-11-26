@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ASC Reporting Map</title>
+<meta name="description" content="3D layout of the ASC returns warehouse: inbound, conveyor, manual, hanging, storage and despatch.">
+<link rel="icon" type="image/svg+xml" href="img/ascg-mark.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="app">
+  <!-- The 3D map fills the screen; everything else floats over it as glass panels. -->
+  <section class="stage" aria-label="3D warehouse view">
+    <div id="viewport"></div>
+    <div id="labels" aria-hidden="true"></div>
+    <div class="tip glass" id="tip" role="tooltip" hidden></div>
+    <div class="tip card glass" id="card" role="dialog" aria-label="Item details" hidden></div>
+    <div class="loading" id="loading">Building the warehouse…</div>
+  </section>
+
+  <!-- Left: brand and section navigation -->
+  <aside class="rail left" id="rail">
+    <div class="brand glass">
+      <img class="mark" src="img/ascg-mark.svg" alt="" width="30" height="32">
+      <div>
+        <h1>ASC Reporting Map</h1>
+        <p id="subtitle">Returns centre · layout v0.2</p>
+      </div>
+    </div>
+    <nav class="sections glass" id="sections" aria-label="Sections"></nav>
+  </aside>
+
+  <!-- Right: view controls and section detail -->
+  <aside class="rail right" id="rail-right">
+    <div class="toolbar glass">
+      <button class="btn" id="btn-yard" aria-pressed="false" hidden>Yard</button>
+      <button class="btn" id="btn-theme">Light mode</button>
+      <button class="btn" id="btn-free" aria-pressed="false" title="Free camera: orbit, zoom and pan">Orbit</button>
+      <button class="btn" id="btn-labels" aria-pressed="true">Labels</button>
+      <button class="btn" id="btn-reset" title="Reset view">Reset</button>
+    </div>
+    <div class="detail glass" id="panel" aria-live="polite"></div>
+    <button class="btn glass show-panel" id="btn-panel" hidden>← Show panel</button>
+  </aside>
+
+  <!-- Bottom: today's numbers -->
+  <section class="dock" id="dock" aria-label="Today's numbers"></section>
+  <section class="dock stock" id="dock-stock" aria-label="Stockholding"></section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="js/asc-elements.js"></script>
+<script src="js/layout-config.js"></script>
+<script src="js/sample-data.js"></script>
+<script src="js/sample-stock.js"></script>
+<script src="js/warehouse.js"></script>
+<script src="js/outdoor.js"></script>
+</body>
+</html>

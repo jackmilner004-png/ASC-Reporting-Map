@@ -1,0 +1,1497 @@
+/* =========================================================================
+   ASC warehouse layout and viewer.
+   - Site elements (benches, chutes, racking, hanging rails, dock doors) are
+     defined here in the same style as the element library.
+   - Everything placed is instanced per zone, so thousands of items stay fast
+     and each zone can be greyed out or highlighted on its own.
+   Axes: +X east, +Z south (the bay-door wall), +Y up. 1 unit = 1 m.
+   ========================================================================= */
+(() => {
+const T = THREE, C = window.ASC_LAYOUT, PI = Math.PI;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function seeded(seed) { let s = seed; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+const R = seeded(20261125);
+const pick = a => a[Math.floor(R() * a.length)];
+
+function std(color, o = {}) { return new T.MeshStandardMaterial(Object.assign({ color, roughness: 0.6, metalness: 0 }, o)); }
+function bx(w, h, d, mat, x = 0, y = 0, z = 0) { const m = new T.Mesh(new T.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); return m; }
+function cy(r, len, mat, axis, x = 0, y = 0, z = 0, seg = 14) {
+  const m = new T.Mesh(new T.CylinderGeometry(r, r, len, seg), mat);
+  if (axis === "x") m.rotation.z = PI / 2;
+  if (axis === "z") m.rotation.x = PI / 2;
+  m.position.set(x, y, z); return m;
+}
+function canvasTex(w, h, draw) {
+  const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h);
+  const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding; t.anisotropy = 4; return t;
+}
+
+/* ---------- Zones ---------- */
+const ZONES = [
+  { id: "inbound",  name: "Inbound",             color: "#3b7fc4", key: "1" },
+  { id: "conveyor", name: "Conveyor processing", color: "#e0a800", key: "2" },
+  { id: "manual",   name: "Manual processing",   color: "#2f9e6e", key: "3" },
+  { id: "hanging",  name: "Hanging processing",  color: "#8a5cc9", key: "4" },
+  { id: "hangstore", name: "Hanging storage",    color: "#26a6c2", key: "5" },
+  { id: "storage",  name: "Storage",             color: "#cf5f34", key: "6" },
+  { id: "despatch", name: "Despatch",            color: "#c93a6a", key: "7" }
+];
+const Z = Object.fromEntries(ZONES.map(z => [z.id, z]));
+
+/* =========================================================================
+   Site elements (metres). Origin: floor, centre of footprint.
+   ========================================================================= */
+const M = {
+  steel: std("#9aa3aa", { metalness: 0.6, roughness: 0.4 }),
+  frame: std("#3d4a57", { metalness: 0.5, roughness: 0.5 }),
+  benchTop: std("#c3c9ce", { metalness: 0.25, roughness: 0.45 }),
+  black: std("#1b1e21", { roughness: 0.5 }),
+  screen: std("#33424f", { roughness: 0.2, metalness: 0.3, emissive: "#18242e" }),
+  rackBlue: std("#2f5d9e", { metalness: 0.4, roughness: 0.5 }),
+  rackOrange: std("#e2711d", { roughness: 0.5 }),
+  rubber: std("#26292c", { roughness: 0.85 }),
+  doorPanel: std("#8f9aa3", { metalness: 0.4, roughness: 0.45 }),
+  leveller: std("#4a5056", { metalness: 0.5, roughness: 0.6 }),
+  yellow: std("#f2b705", { roughness: 0.5 }),
+  label: std("#f4f4f1", { roughness: 0.7 }),
+  belt: std("#0d0f11", { roughness: 0.8 }),                         // matches the library conveyor
+  convFrame: std("#5f6a73", { metalness: 0.5, roughness: 0.45 }),
+  leg: std("#4b545b", { metalness: 0.5, roughness: 0.5 })
+};
+const STRIPE = canvasTex(64, 256, (g, w, h) => {
+  g.fillStyle = "#f2b705"; g.fillRect(0, 0, w, h); g.fillStyle = "#16181b";
+  for (let y = -w; y < h + w; y += 48) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y + w); g.lineTo(w, y + w + 22); g.lineTo(0, y + 22); g.fill(); }
+});
+M.stripe = std("#ffffff", { map: STRIPE, roughness: 0.5 });
+const GARMENT_COLOURS = ["#1f2a44", "#151617", "#e6dfcf", "#7a1f2b", "#5b6b3a", "#3d5a80", "#8a8d91", "#c7a27c"];
+const garmentMats = {};
+
+const SITE = {
+  /* Pack bench: operator stands on the +Z side. */
+  bench() {
+    const g = new T.Group();
+    g.add(bx(1.8, 0.04, 0.8, M.benchTop, 0, 0.88, 0));
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(bx(0.05, 0.86, 0.05, M.frame, sx * 0.85, 0.43, sz * 0.35));
+    g.add(bx(1.72, 0.025, 0.7, M.benchTop, 0, 0.25, 0));
+    for (const sx of [-1, 1]) g.add(bx(0.04, 0.72, 0.04, M.frame, sx * 0.85, 1.26, -0.38));
+    g.add(bx(1.8, 0.03, 0.3, M.benchTop, 0, 1.5, -0.25));
+    g.add(bx(0.5, 0.31, 0.03, M.screen, 0.45, 1.2, -0.3));
+    g.add(bx(0.04, 0.2, 0.04, M.black, 0.45, 0.98, -0.31));
+    g.add(bx(0.14, 0.05, 0.09, M.black, -0.2, 0.925, 0.15));   // scanner
+    return g;
+  },
+  /* Gravity chute: starts at the belt edge (z=0) and runs out along +Z to a
+     wide tray spanning the benches it feeds. */
+  chute(p) {
+    const g = new T.Group(), L = p.L || 1.6, h1 = p.h1, h2 = p.h2, trayW = p.trayW;
+    const ang = Math.atan2(h1 - h2, L), len = Math.hypot(L, h1 - h2);
+    const slide = new T.Group();
+    slide.add(bx(0.6, 0.02, len, M.steel));
+    for (const sx of [-1, 1]) slide.add(bx(0.02, 0.12, len, M.steel, sx * 0.31, 0.06, 0));
+    slide.rotation.x = ang; slide.position.set(0, (h1 + h2) / 2, L / 2); g.add(slide);
+    g.add(bx(trayW, 0.025, 0.5, M.steel, 0, h2, L + 0.25));
+    g.add(bx(trayW, 0.1, 0.02, M.yellow, 0, h2 + 0.05, L + 0.5));
+    for (const sx of [-1, 1]) g.add(bx(0.02, 0.1, 0.5, M.steel, sx * trayW / 2, h2 + 0.05, L + 0.25));
+    for (const sx of [-1, 1]) { g.add(bx(0.04, h2, 0.04, M.frame, sx * (trayW / 2 - 0.1), h2 / 2, L + 0.3)); g.add(bx(0.04, h1 - 0.1, 0.04, M.frame, sx * 0.27, (h1 - 0.1) / 2, 0.2)); }
+    return g;
+  },
+  /* Curved belt section. Centre at origin, centreline radius p.r, running from
+     angle p.a0 through p.angle (radians), point = (r cos a, r sin a) in X/Z. */
+  curve(p) {
+    const g = new T.Group(), n = Math.max(6, Math.round(Math.abs(p.angle) / (PI / 16))), w = p.w, h = p.h;
+    const seg = (r, a, b, wd, ht, y, mat) => {
+      const x1 = r * Math.cos(a), z1 = r * Math.sin(a), x2 = r * Math.cos(b), z2 = r * Math.sin(b);
+      const m = bx(Math.hypot(x2 - x1, z2 - z1) + 0.02, ht, wd, mat, (x1 + x2) / 2, y, (z1 + z2) / 2);
+      m.rotation.y = Math.atan2(-(z2 - z1), x2 - x1); g.add(m);
+    };
+    for (let i = 0; i < n; i++) {
+      const a = p.a0 + p.angle * i / n, b = p.a0 + p.angle * (i + 1) / n;
+      seg(p.r, a, b, w, 0.012, h - 0.006, M.belt);
+      for (const s of [-1, 1]) { seg(p.r + s * (w / 2 + 0.02), a, b, 0.04, 0.13, h - 0.055, M.convFrame); seg(p.r + s * (w / 2 + 0.004), a, b, 0.008, 0.04, h + 0.055, M.yellow); }
+    }
+    for (let i = 0; i <= n; i += Math.max(2, Math.round(n / 4))) {
+      const a = p.a0 + p.angle * i / n;
+      for (const s of [-1, 1]) { const r = p.r + s * (w / 2 + 0.02); g.add(bx(0.05, h - 0.12, 0.05, M.leg, r * Math.cos(a), (h - 0.12) / 2, r * Math.sin(a))); }
+    }
+    return g;
+  },
+  /* Inclined belt running along +X from height h1 (x=0) to h2 (x=len). */
+  incline(p) {
+    const g = new T.Group(), L = p.len, w = p.w, ang = Math.atan2(p.h2 - p.h1, L), sl = Math.hypot(L, p.h2 - p.h1);
+    const run = new T.Group();
+    run.add(bx(sl, 0.012, w, M.belt, 0, -0.006, 0));
+    for (const s of [-1, 1]) { run.add(bx(sl, 0.13, 0.04, M.convFrame, 0, -0.055, s * (w / 2 + 0.02))); run.add(bx(sl, 0.04, 0.008, M.yellow, 0, 0.055, s * (w / 2 + 0.004))); }
+    run.rotation.z = ang; run.position.set(L / 2, (p.h1 + p.h2) / 2, 0); g.add(run);
+    const nl = Math.max(2, Math.ceil(L / 2.5));
+    for (let i = 0; i <= nl; i++) {
+      const x = 0.2 + (L - 0.4) * i / nl, y = p.h1 + (p.h2 - p.h1) * x / L - 0.12;
+      for (const s of [-1, 1]) g.add(bx(0.05, y, 0.05, M.leg, x, y / 2, s * (w / 2 + 0.02)));
+    }
+    return g;
+  },
+  /* Gravity roller conveyor section along X, rollers at 100 mm pitch. */
+  roller(p) {
+    const g = new T.Group(), L = p.len, w = 0.6, h = 0.75;
+    for (const s of [-1, 1]) g.add(bx(L, 0.1, 0.04, M.leg, 0, h - 0.05, s * (w / 2 + 0.02)));
+    for (let x = -L / 2 + 0.05; x < L / 2; x += 0.1) g.add(cy(0.024, w, M.steel, "z", x, h - 0.03, 0, 8));
+    for (const x of [-L / 2 + 0.15, L / 2 - 0.15]) for (const s of [-1, 1]) g.add(bx(0.05, h - 0.1, 0.05, M.leg, x, (h - 0.1) / 2, s * (w / 2 + 0.02)));
+    return g;
+  },
+  /* Low-poly closed tote for stacks on pallets and rollers (inside is never seen). */
+  toteLow(p) {
+    const c = { black: "#141618", red: "#c4272f", pink: "#ec72ab" }[p.colour] || "#141618";
+    garmentMats["tote" + c] = garmentMats["tote" + c] || std(c, { roughness: 0.5 });
+    const m = garmentMats["tote" + c], g = new T.Group();
+    g.add(bx(0.58, 0.284, 0.38, m, 0, 0.142, 0));
+    g.add(bx(0.624, 0.016, 0.424, m, 0, 0.292, 0));
+    for (const s of [-1, 1]) g.add(bx(0.012, 0.035, 0.12, M.black, s * 0.291, 0.24, 0));
+    return g;
+  },
+  /* Low-poly bagged parcel for the layout (the library bag is ~3,000 triangles,
+     too heavy for thousands of copies). Same sizes and colours. */
+  bagLow(p) {
+    const S = { small: [0.35, 0.25, 0.06], medium: [0.45, 0.35, 0.1] }[p.size], [L, W, Hh] = S;
+    const geo = new T.BoxGeometry(1, 1, 1, 6, 1, 4), pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const nx = pos.getX(i) * 2, nz = pos.getZ(i) * 2, top = pos.getY(i) > 0;
+      const f = Math.pow(Math.max(0, 1 - Math.pow(Math.abs(nx), 4)), 0.55) * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(nz), 4)), 0.55);
+      pos.setXYZ(i, nx * L / 2, top ? 0.002 + (Hh - 0.002) * f : 0.004 * f, nz * W / 2);
+    }
+    geo.computeVertexNormals();
+    garmentMats["bag" + p.colour] = garmentMats["bag" + p.colour] || std(p.colour === "white" ? "#dfe2e4" : "#5a6167", { roughness: 0.55 });
+    const g = new T.Group(); g.add(new T.Mesh(geo, garmentMats["bag" + p.colour]));
+    g.add(bx(Math.min(0.15, L * 0.4), 0.002, Math.min(0.1, W * 0.3), M.label, L * 0.08, Hh + 0.001, W * 0.06));
+    return g;
+  },
+  /* One bay of pallet racking, 2.7 m wide x 1.1 m deep. Beam tops at p.levels. */
+  rack(p) {
+    const g = new T.Group(), H = p.height;
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(bx(0.08, H, 0.08, M.rackBlue, sx * 1.35, H / 2, sz * 0.55));
+    for (const sx of [-1, 1]) {
+      for (const y of [0.3, H / 2, H - 0.15]) g.add(bx(0.04, 0.04, 1.1, M.rackBlue, sx * 1.35, y, 0));
+      const d = bx(0.03, Math.hypot(1.1, H / 2 - 0.3), 0.03, M.rackBlue, sx * 1.35, (H / 2 + 0.3) / 2, 0);
+      d.rotation.x = Math.atan2(1.1, H / 2 - 0.3); g.add(d);
+    }
+    for (const y of p.levels) for (const sz of [-1, 1]) g.add(bx(2.62, 0.12, 0.05, M.rackOrange, 0, y - 0.06, sz * 0.55));
+    return g;
+  },
+  /* 3 m section of garment rail at 2.3 m. */
+  rail() {
+    const g = new T.Group();
+    g.add(cy(0.022, 3.0, M.steel, "x", 0, 2.3, 0));
+    for (const sx of [-1, 1]) {
+      g.add(bx(0.06, 2.36, 0.06, M.frame, sx * 1.5, 1.18, 0));
+      g.add(bx(0.3, 0.012, 0.3, M.frame, sx * 1.5, 0.006, 0));
+    }
+    return g;
+  },
+  /* Garment on a hanger, hanging off a rail at 2.3 m. Thin along X (the rail). */
+  garment(p) {
+    const g = new T.Group();
+    garmentMats[p.colour] = garmentMats[p.colour] || std(p.colour, { roughness: 0.85 });
+    g.add(bx(0.01, 0.08, 0.01, M.steel, 0, 2.27, 0));
+    g.add(bx(0.015, 0.02, 0.42, M.black, 0, 2.22, 0));
+    g.add(bx(0.05, 0.9, 0.44, garmentMats[p.colour], 0, 1.76, 0));
+    return g;
+  },
+  /* Dock door portal in the south wall; outside faces +Z. */
+  door(p) {
+    const g = new T.Group(), w = p.w, h = p.h;
+    for (const sx of [-1, 1]) g.add(bx(0.3, h + 0.5, 0.35, M.stripe, sx * (w / 2 + 0.15), (h + 0.5) / 2, 0));
+    g.add(bx(w + 0.6, 0.5, 0.35, M.frame, 0, h + 0.25, 0));
+    g.add(cy(0.24, w, M.doorPanel, "x", 0, h - 0.05, -0.25));
+    g.add(bx(w, h * 0.4, 0.05, M.doorPanel, 0, h - h * 0.2, 0.05));
+    for (let i = 1; i < 6; i++) g.add(bx(w, 0.015, 0.06, M.frame, 0, h - i * h * 0.4 / 6, 0.06));
+    g.add(bx(w - 0.2, 0.05, 2.2, M.leveller, 0, 0.025, -1.3));
+    for (const sx of [-1, 1]) g.add(bx(0.25, 0.4, 0.15, M.rubber, sx * (w / 2 - 0.35), 1.15, 0.25));
+    const sign = new T.Mesh(new T.PlaneGeometry(1.4, 0.4), std("#ffffff", { map: canvasTex(280, 80, (c, cw, ch) => {
+      c.fillStyle = p.kind === "in" ? "#3b7fc4" : "#c93a6a"; c.fillRect(0, 0, cw, ch);
+      c.fillStyle = "#fff"; c.font = "800 44px Archivo, Arial, sans-serif"; c.textBaseline = "middle"; c.fillText("D" + p.n, 14, ch / 2 + 2);
+      c.font = "600 22px Inter, Arial, sans-serif"; c.textAlign = "right"; c.fillText(p.kind === "in" ? "INBOUND" : "DESPATCH", cw - 12, ch / 2 + 1);
+    }), roughness: 0.6 }));
+    sign.position.set(0, h + 0.25, 0.18); g.add(sign);
+    return g;
+  }
+};
+
+/* =========================================================================
+   Instancing: each element variant is flattened to one geometry per
+   material, then drawn as InstancedMesh per zone.
+   ========================================================================= */
+const templates = new Map(), ticks = [];
+function sliceGeo(g, start, count) {
+  const out = new T.BufferGeometry();
+  for (const [name, a] of Object.entries(g.attributes))
+    out.setAttribute(name, new T.BufferAttribute(a.array.slice(start * a.itemSize, (start + count) * a.itemSize), a.itemSize));
+  return out;
+}
+function mergeGeos(gs) {
+  let n = 0; for (const g of gs) n += g.attributes.position.count;
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+  let o = 0;
+  for (const g of gs) {
+    const a = g.attributes, c = a.position.count;
+    pos.set(a.position.array, o * 3);
+    if (a.normal) nor.set(a.normal.array, o * 3);
+    if (a.uv) uv.set(a.uv.array, o * 2);
+    o += c;
+  }
+  const m = new T.BufferGeometry();
+  m.setAttribute("position", new T.BufferAttribute(pos, 3));
+  m.setAttribute("normal", new T.BufferAttribute(nor, 3));
+  m.setAttribute("uv", new T.BufferAttribute(uv, 2));
+  return m;
+}
+function template(key, p = {}) {
+  const id = key + JSON.stringify(p);
+  if (templates.has(id)) return templates.get(id);
+  const obj = SITE[key] ? SITE[key](p) : ASC.make(key, p);
+  obj.updateMatrixWorld(true);
+  const byMat = new Map();
+  const add = (mat, g) => { if (!byMat.has(mat)) byMat.set(mat, []); byMat.get(mat).push(g); };
+  obj.traverse(o => {
+    if (!o.isMesh) return;
+    const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    g.applyMatrix4(o.matrixWorld);
+    if (Array.isArray(o.material)) {
+      if (g.groups.length) for (const gr of g.groups) add(o.material[gr.materialIndex], sliceGeo(g, gr.start, gr.count));
+      else add(o.material[0], g);
+    } else add(o.material, g);
+  });
+  const t = { id, parts: [...byMat].map(([mat, gs]) => ({ mat, geo: mergeGeos(gs) })) };
+  if (obj.userData.tick) ticks.push(obj.userData.tick);
+  templates.set(id, t);
+  return t;
+}
+
+const world = new T.Group();
+const zoneGroups = {}, zoneMats = {}, zoneMatCache = new Map(), buckets = new Map(), counts = {};
+ZONES.forEach(z => { zoneGroups[z.id] = new T.Group(); zoneMats[z.id] = []; counts[z.id] = {}; world.add(zoneGroups[z.id]); });
+function zoneMat(zone, mat) {
+  const k = zone + mat.uuid;
+  if (!zoneMatCache.has(k)) {
+    const m = mat.clone();
+    zoneMatCache.set(k, m);
+    zoneMats[zone].push({ mat: m, color: m.color.clone(), map: m.map, emissive: m.emissive ? m.emissive.clone() : null });
+  }
+  return zoneMatCache.get(k);
+}
+const _q = new T.Quaternion(), _e = new T.Euler(), _s = new T.Vector3(1, 1, 1);
+function put(zone, key, p, x, y, z, ry = 0) {
+  const t = template(key, p), k = zone + "|" + t.id;
+  if (!buckets.has(k)) buckets.set(k, { zone, t, list: [] });
+  _q.setFromEuler(_e.set(0, ry, 0));
+  const list = buckets.get(k).list;
+  list.push(new T.Matrix4().compose(new T.Vector3(x, y, z), _q, _s));
+  if (collecting) collecting.push({ k, i: list.length - 1 });
+  counts[zone][key] = (counts[zone][key] || 0) + 1;
+}
+/* Group the instances placed between beginItem() and endItem() so one item
+   (a cage and everything in it) can be lifted as a unit later. */
+let collecting = null;
+const beginItem = () => { collecting = []; };
+const endItem = () => { const c = collecting; collecting = null; return c; };
+function addStatic(zone, mesh) {
+  mesh.material = zoneMat(zone, mesh.material);
+  mesh.receiveShadow = true;
+  zoneGroups[zone].add(mesh);
+}
+function flushInstances() {
+  for (const b of buckets.values()) for (const part of b.t.parts) {
+    const { zone, t, list } = b;
+    const im = new T.InstancedMesh(part.geo, zoneMat(zone, part.mat), list.length);
+    (b.meshes = b.meshes || []).push(im);
+    im.userData.tid = t.id.slice(0, 40);
+    list.forEach((m, i) => im.setMatrixAt(i, m));
+    im.castShadow = im.receiveShadow = true;
+    im.frustumCulled = false;       // r147 has no per-instance bounds
+    zoneGroups[zone].add(im);
+  }
+}
+function floorPaint(zone, w, d, x, z, color, map) {
+  const m = new T.Mesh(new T.PlaneGeometry(w, d), std(color, { map: map || null, roughness: 0.8 }));
+  m.rotation.x = -PI / 2; m.position.set(x, 0.006, z);
+  addStatic(zone, m);
+}
+
+/* ---------- Load helpers ---------- */
+const H = { tote: 0.3, parcelS: 0.16, parcelM: 0.46, os: 0.6, bagS: 0.06, bagM: 0.1 };
+const TOTES = ["black", "red", "pink"];
+function loose(zone, kind, x, y, z, ry = 0) {
+  if (kind === "tote") put(zone, "tote", { colour: pick(TOTES) }, x, y, z, ry);
+  else if (kind === "parcelS") put(zone, "parcel", { size: "small" }, x, y, z, ry);
+  else if (kind === "parcelM") put(zone, "parcel", { size: "medium" }, x, y, z, ry);
+  else if (kind === "os") put(zone, "parcel", { size: "oversized" }, x, y, z, ry);
+  else if (kind === "bagS") put(zone, "bagLow", { size: "small", colour: R() < 0.6 ? "grey" : "white" }, x, y, z, ry);
+  else if (kind === "bagM") put(zone, "bagLow", { size: "medium", colour: R() < 0.6 ? "grey" : "white" }, x, y, z, ry);
+}
+const rot = (x, z, ry) => { const c = Math.cos(ry), s = Math.sin(ry); return (dx, dz) => [x + dx * c + dz * s, z - dx * s + dz * c]; };
+/* A UK pallet (1.2 x 1.0) with goods stacked in layers, up to maxH tall. */
+function palletLoad(zone, x, y, z, ry, kind, maxH) {
+  put(zone, "pallet", { type: "uk" }, x, y, z, ry);
+  const at = rot(x, z, ry);
+  const grid = { tote: [[-0.3, -0.2], [0.3, -0.2], [-0.3, 0.2], [0.3, 0.2]], parcelM: [[-0.305, -0.23], [0.305, -0.23], [-0.305, 0.23], [0.305, 0.23]],
+                 parcelS: [[-0.23, -0.19], [0.23, -0.19], [-0.23, 0.19], [0.23, 0.19]], bagM: [[-0.23, -0.19], [0.23, -0.19], [-0.23, 0.19], [0.23, 0.19]], os: [[0, 0]] }[kind];
+  const h = H[kind], layers = Math.max(1, Math.floor(maxH / h)), full = Math.max(1, Math.round(layers * (0.45 + R() * 0.55)));
+  let top = y + 0.144;
+  for (let l = 0; l < full; l++) {
+    const n = l === full - 1 ? 1 + Math.floor(R() * grid.length) : grid.length;
+    const colour = pick(TOTES);
+    for (let i = 0; i < n; i++) {
+      const [px, pz] = at(grid[i][0], grid[i][1]), jit = kind === "bagM" ? (R() - 0.5) * 0.3 : 0;
+      if (kind === "tote") put(zone, "toteLow", { colour }, px, top, pz, ry);
+      else loose(zone, kind, px, top, pz, ry + jit);
+    }
+    top += h;
+  }
+}
+/* Despatch pallet: exactly `count` totes, 4 per layer (24 = 6 layers, 1.94 m). */
+function totePallet(zone, x, z, ry, colour, count) {
+  put(zone, "pallet", { type: "uk" }, x, 0, z, ry);
+  const at = rot(x, z, ry), grid = [[-0.3, -0.2], [0.3, -0.2], [-0.3, 0.2], [0.3, 0.2]];
+  for (let i = 0; i < count; i++) {
+    const [px, pz] = at(grid[i % 4][0], grid[i % 4][1]);
+    put(zone, "toteLow", { colour }, px, 0.144 + Math.floor(i / 4) * 0.3, pz, ry);
+  }
+  return 0.144 + Math.ceil(count / 4) * 0.3 + 0.01;
+}
+/* Roll cage with some parcels and bags inside. Gates face +Z rotated by ry. */
+function loadedCage(zone, x, z, ry, fill = R()) {
+  put(zone, "cage", {}, x, 0, z, ry);
+  const at = rot(x, z, ry);
+  let y = 0.165;
+  const layers = Math.floor(fill * 7);
+  for (let l = 0; l < layers; l++) {
+    const [ax, az] = at(-0.12, 0.14), [bx_, bz] = at(0.17, -0.2);
+    loose(zone, "parcelS", ax, y, az, ry + PI / 2);
+    loose(zone, R() < 0.5 ? "bagS" : "bagM", bx_, y, bz, ry + PI / 2 + (R() - 0.5) * 0.4);
+    y += 0.17;
+  }
+}
+/* Bench plus what is sitting on it. */
+function dressedBench(zone, x, z, ry, style) {
+  put(zone, "bench", {}, x, 0, z, ry);
+  const at = rot(x, z, ry), top = 0.9;
+  let [px, pz] = at(-0.5, -0.05);
+  if (R() < 0.85) put(zone, "tote", { colour: style === "pack" ? pick(["black", "red"]) : pick(TOTES) }, px, top, pz, ry);
+  [px, pz] = at(0.35, 0.12);
+  const k = R();
+  if (style === "hanging") loose(zone, "bagM", px, top, pz, ry + 0.2);
+  else if (k < 0.4) loose(zone, "parcelS", px, top, pz, ry + (R() - 0.5) * 0.4);
+  else if (k < 0.75) loose(zone, pick(["bagS", "bagM"]), px, top, pz, ry + (R() - 0.5) * 0.6);
+  [px, pz] = at(0, 0);
+  if (R() < 0.6) put(zone, "tote", { colour: "black" }, px, 0.265, pz, ry);
+}
+/* Garment rail run of `len` metres along X at z, filled in clusters. */
+function railRun(zone, x0, len, z, fill) {
+  const nSec = Math.ceil(len / 3); len = nSec * 3;
+  for (let s = 0; s < nSec; s++) put(zone, "rail", {}, x0 + 1.5 + s * 3, 0, z);
+  let on = R() < fill, n = 0;
+  for (let x = x0 + 0.15; x < x0 + len - 0.15; x += 0.13) {
+    if (R() < 0.06) on = R() < fill;
+    if (!on) continue;
+    put(zone, "garment", { colour: pick(GARMENT_COLOURS) }, x, 0, z + (R() - 0.5) * 0.03, (R() - 0.5) * 0.12); n++;
+  }
+  return n;
+}
+
+/* Things the pointer can hover: { kind, rec, zone, x, y, z, w, h, d } in building coordinates. */
+const hoverables = [];
+const DATA = Object.assign({ inboundCages: [], despatchPallets: [], benchOutput: [], routes: [] }, window.ASC_DATA || {});
+DATA.stock = Object.assign({ vendors: [] }, DATA.stock);
+DATA.stock.racking = Object.assign({ pallets: [] }, DATA.stock.racking);
+DATA.stock.hanging = Object.assign({ garments: [] }, DATA.stock.hanging);
+const BENCH_DATA = Object.fromEntries(DATA.benchOutput.map(b => [String(b.bench), b]));
+
+/* =========================================================================
+   Layout (Jack's remap, 25 Nov):
+     west wall (all bay doors) | middle                      | east
+     Inbound (north)           | Hanging processing (north)  | Hanging storage (north)
+                               | Conveyor processing         | Manual processing
+     Despatch (south)          | Racking storage (south)     |
+   Sizes come from the config counts.
+   ========================================================================= */
+const D = C.bayDoors, CV = C.conveyor, DS = C.despatch, IN = C.inbound, MN = C.manual, HG = C.hanging, ST = C.storage;
+const doorsIn = Math.min(D.inbound, D.count), doorsOut = Math.max(0, D.count - doorsIn);
+
+/* Conveyor: induction belt → 180° turn → incline → elevated loop sorter; chutes
+   off both straights to pack benches; floor roller takeaway to a palletising comb. */
+const perSide = [Math.ceil(CV.chutes / 2), Math.floor(CV.chutes / 2)];
+const loopR = 1.3, loopLen = perSide[0] * CV.chuteSpacing + 2;
+const chuteRun = 2.4;
+const edgeOff = loopR + CV.beltWidth / 2 + 0.06;
+const benchPairs = Math.ceil(CV.benchesPerChute / 2);                      // benches stand back to back in pairs
+const benchOff = edgeOff + chuteRun + 0.5 + 0.9;                          // loop centre → first bench pair centre
+const takeOff = benchOff + (benchPairs - 1) * 1.9 + 0.9 + 1.2 + 0.35;
+const turnR = 2.5;
+const convW = 1 + 2 * turnR + CV.inclineLength + loopR + loopLen + loopR + 3;
+
+const inLane = 1.25, inSlot = 0.88, inApron = 4.5;            // inbound cage lanes run east from the west wall
+const dsLane = 1.5, dsSlot = 1.35, dsApron = 5;               // despatch pallet lanes, same direction
+const rackDepth = 1.1, rackB2B = 0.1, rackAisle = 3.2, rackWallAisle = 2.0;   // back-to-back pairs of rack rows
+const rackPairs = Math.ceil(ST.rackRows / 2), bayW = 2.75;
+const margin = 1.5, gapX = 4, gapZ = 3;
+
+const midW0 = Math.max(convW, 20, ST.bays * bayW + 2);
+const dims = {
+  inbound:  { w: inApron + IN.cagesPerLane * inSlot + 1.5, d: Math.max(IN.lanes * inLane + 2, doorsIn * 5.5) },
+  despatch: { w: dsApron + DS.palletsPerLine * dsSlot + 1.5, d: Math.max(DS.lines * dsLane + 2, doorsOut * 5.5) },
+  hangProc: { w: midW0, d: 3 + HG.rails * 1.8 + 1 },
+  conveyor: { w: convW, d: takeOff * 2 + 1.5 },
+  storage:  { w: midW0, d: rackWallAisle * 2 + rackPairs * (rackDepth * 2 + rackB2B) + (rackPairs - 1) * rackAisle },
+  hangStor: { w: HG.storageRailLength + 4, d: HG.storageRails * 1.1 + 2 },
+  manual:   { w: MN.benchesPerRow * 2.5 + 6, d: MN.rows * 3.4 + 3 }
+};
+const westW = Math.max(dims.inbound.w, dims.despatch.w), midW = midW0, eastW = Math.max(dims.hangStor.w, dims.manual.w);
+const BW = margin + westW + gapX + midW + gapX + eastW + margin;
+const BD = margin * 2 + Math.max(dims.inbound.d + gapZ + dims.despatch.d,
+                                 dims.hangProc.d + dims.conveyor.d + dims.storage.d + gapZ * 2,
+                                 dims.hangStor.d + dims.manual.d + gapZ);
+const xW = margin, xM = xW + westW + gapX, xE = xM + midW + gapX;
+const zN = -BD + margin, zS = -margin;                          // usable north and south edges
+const R_ = (x0, w, z0, d) => ({ x0, x1: x0 + w, z0, z1: z0 + d });
+const AREAS = {
+  inbound:  R_(xW, westW, zN, dims.inbound.d),
+  despatch: R_(xW, westW, zS - dims.despatch.d, dims.despatch.d),
+  hangProc: R_(xM, midW, zN, dims.hangProc.d),
+  storage:  R_(xM, midW, zS - dims.storage.d, dims.storage.d),
+  hangStor: R_(xE, eastW, zN, dims.hangStor.d),
+  manual:   R_(xE, eastW, zN + dims.hangStor.d + gapZ, zS - (zN + dims.hangStor.d + gapZ))
+};
+{ // conveyor sits centred between hanging and racking
+  const top = AREAS.hangProc.z1 + gapZ, bot = AREAS.storage.z0 - gapZ, d = Math.max(dims.conveyor.d, bot - top);
+  AREAS.conveyor = R_(xM, midW, top, d);
+}
+const rects = {
+  inbound: [AREAS.inbound], despatch: [AREAS.despatch], conveyor: [AREAS.conveyor],
+  manual: [AREAS.manual], hanging: [AREAS.hangProc], hangstore: [AREAS.hangStor], storage: [AREAS.storage]
+};
+/* Door centres along the west wall (z), inbound doors first. */
+const doorZ = [];
+for (let i = 0; i < doorsIn; i++) doorZ.push(AREAS.inbound.z0 + (i + 0.5) * (AREAS.inbound.z1 - AREAS.inbound.z0) / doorsIn);
+for (let i = 0; i < doorsOut; i++) doorZ.push(AREAS.despatch.z0 + (i + 0.5) * (AREAS.despatch.z1 - AREAS.despatch.z0) / doorsOut);
+
+function fmtTime(s) { const d = new Date(s); return isNaN(d) ? s : d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+
+/* ---------- Inbound: roll cages only, lanes running in from the doors ---------- */
+function buildInbound() {
+  const r = AREAS.inbound, z = "inbound";
+  for (let i = 0; i < doorsIn; i++) put(z, "door", { w: D.width, h: D.height, n: i + 1, kind: "in" }, 0, 0, doorZ[i], -PI / 2);
+  floorPaint(z, inApron - 1, r.z1 - r.z0 - 0.6, r.x0 + (inApron - 1) / 2, (r.z0 + r.z1) / 2, "#5f8fc0");
+  const laneX0 = r.x0 + inApron, laneLen = IN.cagesPerLane * inSlot + 0.3, lz0 = (r.z0 + r.z1) / 2 - IN.lanes * inLane / 2;
+  for (let i = 0; i <= IN.lanes; i++) floorPaint(z, laneLen, 0.05, laneX0 + laneLen / 2, lz0 + i * inLane, "#f2b705");
+  const cap = IN.lanes * IN.cagesPerLane, cages = DATA.inboundCages.slice(0, cap);
+  cages.forEach((rec, i) => {
+    const lane = Math.floor(i / IN.cagesPerLane), k = i % IN.cagesPerLane;
+    const x = laneX0 + 0.15 + (k + 0.5) * inSlot, zz = lz0 + (lane + 0.5) * inLane;
+    beginItem();
+    loadedCage(z, x, zz, -PI / 2, 0.35 + R() * 0.65);           // gates face the doors
+    hoverables.push({ kind: "cage", rec, zone: z, x, y: 0.85, z: zz, w: 0.86, h: 1.72, d: 0.76, parts: endItem(), lift: true });
+  });
+  return [["Bay doors", doorsIn], ["Cages in", cages.length], ["Cage spaces", cap], ["Lanes", IN.lanes]];
+}
+
+/* ---------- Conveyor processing ---------- */
+function buildConveyor() {
+  const r = AREAS.conveyor, z = "conveyor", zc = (r.z0 + r.z1) / 2, Hs = CV.sorterHeight, Hi = CV.inductHeight, bw = CV.beltWidth;
+  const belt = (len, h) => ({ length: Math.round(len * 1000), belt: String(Math.round(bw * 1000)), height: Math.round(h * 1000), running: CV.animateBelts && !reduceMotion ? "on" : "off" });
+  const curve = (cx, cz, rad, a0, angle, h) => put(z, "curve", { r: rad, a0, angle, w: bw, h }, cx, 0, cz);
+  const x00 = r.x0 + (r.x1 - r.x0 - convW) / 2;
+  const xi0 = x00 + 1 + turnR, xi1 = xi0 + CV.inclineLength;
+  const lx0 = xi1 + loopR, lx1 = lx0 + loopLen;
+  const zSo = zc + loopR, zNo = zc - loopR, zInd = zc - 2 * turnR;      // induction on the north side, nearest inbound
+  const indLen = Math.min(CV.inductLength, lx0 - xi0 - 0.5);
+  put(z, "conveyor", belt(indLen, Hi), xi0 + indLen / 2, 0, zInd);
+  let cages = 0;
+  for (let i = 0; i < Math.floor(indLen / 1.6); i++) { loadedCage(z, xi0 + 0.9 + i * 1.6, zInd - 1.5, 0, 0.4 + R() * 0.6); cages++; }
+  for (let x = xi0 + 0.6; x < xi0 + indLen - 0.4; x += 1 + R() * 1.6) loose(z, pick(["parcelS", "bagS", "bagM"]), x, Hi, zInd, (R() - 0.5) * 0.4);
+  curve(xi0, zc - turnR, turnR, PI / 2, PI, Hi);
+  put(z, "incline", { len: CV.inclineLength, h1: Hi, h2: Hs, w: bw }, xi0, 0, zc);
+  const nSec = Math.max(1, Math.round(loopLen / CV.sectionLength)), secL = loopLen / nSec;
+  for (let i = 0; i < nSec; i++) for (const zz of [zSo, zNo]) put(z, "conveyor", belt(secL, Hs), lx0 + (i + 0.5) * secL, 0, zz);
+  curve(lx0, zc, loopR, PI / 2, PI, Hs);
+  curve(lx1, zc, loopR, -PI / 2, PI, Hs);
+  for (const zz of [zSo, zNo]) for (let x = lx0 + 0.6; x < lx1 - 0.6; x += 1.4 + R() * 2.4) loose(z, pick(["parcelS", "bagS", "bagM", "parcelS"]), x, Hs, zz, (R() - 0.5) * 0.3);
+  const nb = CV.benchesPerChute, trayW = 1.0;
+  let chutes = 0, benches = 0;
+  [1, -1].forEach((side, si) => {
+    for (let k = 0; k < perSide[si]; k++) {
+      const x = lx0 + 1 + (k + 0.5) * CV.chuteSpacing, ry = side > 0 ? 0 : PI, edge = zc + side * edgeOff;
+      put(z, "chute", { L: chuteRun, h1: Hs - 0.02, h2: 0.86, trayW }, x, 0, edge, ry); chutes++;
+      for (let j = 0; j < nb; j++) {
+        // back to back along the chute line: bench A faces west, bench B east, operators either side
+        const face = j % 2 ? 1 : -1, bxp = x + face * 0.42, bzp = zc + side * (benchOff + Math.floor(j / 2) * 1.9);
+        const id = (si * perSide[0] + k + 1) + String.fromCharCode(65 + j);
+        dressedBench(z, bxp, bzp, face * PI / 2, "pack"); benches++;
+        const rec = BENCH_DATA[id] || { bench: id, missing: true };
+        hoverables.push({ kind: "bench", rec, zone: z, x: bxp, y: 0.8, z: bzp, w: 0.86, h: 1.6, d: 1.86, lift: false });
+      }
+      if (R() < 0.7) loose(z, pick(["parcelS", "bagS", "bagM"]), x + (R() - 0.5) * trayW * 0.6, 0.875, edge + side * (chuteRun + 0.25), R() * PI);
+    }
+  });
+  const tx0 = lx0 + 0.3, tx1 = lx1 + loopR + 2, rl = 3;
+  const rollerRun = (xa, xb, zz, ry, totes) => {
+    const n = Math.max(1, Math.round(Math.abs(xb - xa) / rl)), L = Math.abs(xb - xa) / n;
+    for (let i = 0; i < n; i++) {
+      const t = xa + Math.sign(xb - xa) * (i + 0.5) * L;
+      const [px, pz] = ry ? [zz, t] : [t, zz];
+      put(z, "roller", { len: +L.toFixed(3) }, px, 0, pz, ry);
+    }
+    if (totes) for (let t = Math.min(xa, xb) + 0.5; t < Math.max(xa, xb) - 0.5; t += 0.8 + R() * 2.5) { const [px, pz] = ry ? [zz, t] : [t, zz]; put(z, "toteLow", { colour: pick(TOTES) }, px, 0.75, pz, ry ? 0 : PI / 2); }
+  };
+  /* Tote out (Jack, 25 Nov): sits in the south-west corner of the zone, facing despatch.
+     Flow: north takeaway runs east, drops down the east end, the south takeaway runs
+     west to a manifold, and spurs run west towards despatch with a pallet at each end. */
+  const zT = zc + takeOff, spurLen = 5, mx = x00 + 1 + 1.3 + spurLen + 0.35;
+  const pitch = Math.min(2.0, (takeOff - 1.6) / Math.max(1, CV.combSpurs));
+  rollerRun(tx0, tx1, zc - takeOff, 0, true);
+  rollerRun(zc - takeOff + 0.35, zT - 0.35, tx1 + 0.35, PI / 2, true);
+  rollerRun(mx - 0.35, tx1 + 0.7, zT, 0, true);
+  rollerRun(zT - 0.35, zT - 0.35 - pitch * (CV.combSpurs - 0.5), mx, PI / 2, true);
+  let pallets = 0;
+  for (let s = 0; s < CV.combSpurs; s++) {
+    const sz = zT - 0.35 - pitch * (s + 0.5);
+    rollerRun(mx - 0.35, mx - 0.35 - spurLen, sz, 0, true);
+    if (R() < 0.85) { palletLoad(z, mx - 0.35 - spurLen - 0.75, 0, sz, 0, "tote", 1.4); pallets++; }
+  }
+  const loopLength = Math.round(2 * loopLen + 2 * PI * loopR);
+  return [["Chutes", chutes], ["Pack benches", benches], ["Sorter loop", loopLength + " m"], ["Sorter height", Hs + " m"], ["Induction cages", cages], ["Tote pallets", pallets]];
+}
+
+/* ---------- Despatch: pallets of 24 totes in lanes off the west-wall doors ---------- */
+function buildDespatch() {
+  const r = AREAS.despatch, z = "despatch";
+  for (let i = 0; i < doorsOut; i++) put(z, "door", { w: D.width, h: D.height, n: doorsIn + i + 1, kind: "out" }, 0, 0, doorZ[doorsIn + i], -PI / 2);
+  floorPaint(z, dsApron - 1, r.z1 - r.z0 - 0.6, r.x0 + (dsApron - 1) / 2, (r.z0 + r.z1) / 2, "#c2577a");
+  const laneX0 = r.x0 + dsApron, laneLen = DS.palletsPerLine * dsSlot + 0.3, lz0 = (r.z0 + r.z1) / 2 - DS.lines * dsLane / 2;
+  for (let i = 0; i <= DS.lines; i++) floorPaint(z, laneLen, 0.06, laneX0 + laneLen / 2, lz0 + i * dsLane, "#f2b705");
+  floorPaint(z, 0.08, DS.lines * dsLane, laneX0 - 0.02, lz0 + DS.lines * dsLane / 2, "#f2b705");
+  const used = new Array(DS.lines).fill(0);
+  let shown = 0;
+  for (let i = 0; i < DS.lines; i++) {
+    const zz = lz0 + (i + 0.5) * dsLane;
+    const tex = canvasTex(128, 128, (g, w, h) => { g.fillStyle = "#f2b705"; g.font = "800 84px Archivo, Arial, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(String(i + 1), w / 2, h / 2 + 4); });
+    const lbl = new T.Mesh(new T.PlaneGeometry(1.0, 1.0), std("#ffffff", { map: tex, transparent: true, roughness: 0.8 }));
+    lbl.rotation.x = -PI / 2; lbl.rotation.z = -PI / 2; lbl.position.set(laneX0 - 0.65, 0.01, zz); addStatic(z, lbl);
+  }
+  for (const rec of DATA.despatchPallets) {
+    const li = (rec.lane | 0) - 1;
+    if (li < 0 || li >= DS.lines || used[li] >= DS.palletsPerLine) continue;
+    const k = used[li]++, x = laneX0 + 0.15 + (k + 0.5) * dsSlot, zz = lz0 + (li + 0.5) * dsLane;
+    beginItem();
+    const h = totePallet(z, x, zz, 0, TOTES.includes(rec.toteColour) ? rec.toteColour : "black", Math.min(rec.totes || DS.totesPerPallet, 32));
+    hoverables.push({ kind: "pallet", rec, zone: z, x, y: h / 2, z: zz, w: 1.26, h, d: 1.06, parts: endItem(), lift: true });
+    shown++;
+  }
+  const totes = DATA.despatchPallets.reduce((a, p) => a + (p.totes || 0), 0);
+  return [["Despatch lines", DS.lines], ["Bay doors", doorsOut], ["Pallets staged", shown], ["Totes staged", totes], ["Pallet spaces", DS.lines * DS.palletsPerLine], ["Totes per pallet", DS.totesPerPallet]];
+}
+
+/* ---------- Manual processing ---------- */
+function buildManual() {
+  const r = AREAS.manual, z = "manual", cx = (r.x0 + r.x1) / 2;
+  let benches = 0;
+  for (let row = 0; row < MN.rows; row++) {
+    const zz = r.z0 + 2 + row * 3.4, ry = row % 2 ? PI : 0;
+    for (let c = 0; c < MN.benchesPerRow; c++) { dressedBench(z, cx + (c - (MN.benchesPerRow - 1) / 2) * 2.5, zz, ry, "manual"); benches++; }
+    loadedCage(z, r.x0 + 1.2, zz, PI / 2, R());
+    palletLoad(z, r.x1 - 1.4, 0, zz, PI / 2, row % 2 ? "os" : "parcelM", 1.0);
+  }
+  return [["Benches", benches], ["Rows", MN.rows], ["Feed cages", MN.rows], ["Oversize pallets", MN.rows]];
+}
+
+/* ---------- Hanging processing: rails along the back wall with benches ---------- */
+function buildHanging() {
+  const z = "hanging", p = AREAS.hangProc;
+  const len = Math.floor((p.x1 - p.x0 - 4) / 3) * 3, x0 = p.x0 + (p.x1 - p.x0 - len) / 2;
+  let garments = 0;
+  for (let i = 0; i < HG.rails; i++) garments += railRun(z, x0, len, p.z0 + 1.2 + i * 1.8, HG.fill);
+  for (let b = 0; b < HG.benches; b++) dressedBench(z, p.x0 + 3 + (b + 0.5) * (p.x1 - p.x0 - 6) / HG.benches, p.z1 - 1.1, 0, "hanging");
+  return [["Processing rails", HG.rails], ["Benches", HG.benches], ["Garments in process", garments], ["Rail length", HG.rails * len + " m"]];
+}
+
+/* ---------- Hanging storage: one garment per slot, placed from the stock data ---------- */
+const HSTOCK = DATA.stock.hanging, slotPitch = 0.13;
+const hangSlots = Math.floor((Math.floor(HG.storageRailLength / 3) * 3 - 0.3) / slotPitch);
+function buildHangStore() {
+  const z = "hangstore", s = AREAS.hangStor, rails = HSTOCK.rails || HG.storageRails, perRail = HSTOCK.slotsPerRail || hangSlots;
+  const sl = Math.floor(HG.storageRailLength / 3) * 3, sx0 = s.x0 + (s.x1 - s.x0 - sl) / 2;
+  const railZ = i => s.z0 + 1 + i * 1.1;
+  for (let i = 0; i < rails; i++) for (let k = 0; k < sl / 3; k++) put(z, "rail", {}, sx0 + 1.5 + k * 3, 0, railZ(i));
+  let shown = 0;
+  for (const g of HSTOCK.garments) {
+    const m = /HS-R(\d+)-S(\d+)/.exec(g.location || ""); if (!m) continue;
+    const ri_ = +m[1] - 1, si = +m[2] - 1;
+    if (ri_ < 0 || ri_ >= rails || si < 0 || si >= Math.min(perRail, hangSlots)) continue;
+    const x = sx0 + 0.15 + si * slotPitch, zz = railZ(ri_);
+    put(z, "garment", { colour: GARMENT_COLOURS[(+m[2] * 7 + ri_ * 3) % GARMENT_COLOURS.length] }, x, 0, zz, (R() - 0.5) * 0.12);
+    hoverables.push({ kind: "garment", rec: g, zone: z, x, y: 1.25, z: zz, w: 0.12, h: 1.1, d: 0.5, lift: false });
+    shown++;
+  }
+  const cap = rails * Math.min(perRail, hangSlots);
+  return [["Storage rails", rails], ["Garment slots", cap], ["Garments stored", shown], ["In use", Math.round(100 * shown / cap) + "%"]];
+}
+
+/* ---------- Pallet racking along the south wall, placed from the stock data ----------
+   Location IDs: R<row>-B<bay>-L<level>-<A|B>. Rows come in back-to-back pairs;
+   row 1 is nearest the south wall. Level L0 is the floor. */
+const RSTOCK = DATA.stock.racking;
+const STOCK_COL = { consumables: "#b98a52", jobber: "#d64545", dropship: "#e86aa6" };
+const STOCK_NAME = { consumables: "Consumables", jobber: "Jobber (grade C)", dropship: "Dropship" };
+function rackRowZ(row) {   // row 1-based -> { z, face } (face = +1 opens to the south, -1 to the north)
+  const r = AREAS.storage, p = Math.floor((row - 1) / 2), south = (row - 1) % 2 === 0;
+  const pairC = r.z1 - rackWallAisle - rackDepth - rackB2B / 2 - p * (rackDepth * 2 + rackB2B + rackAisle);
+  return { z: pairC + (south ? 1 : -1) * (rackDepth + rackB2B) / 2, face: south ? 1 : -1 };
+}
+function rackBayX(bay) { const r = AREAS.storage, cx = (r.x0 + r.x1) / 2; return cx + (bay - 1 - (ST.bays - 1) / 2) * bayW; }
+function stockPallet(zone, rec, x, y, zz, maxH) {
+  put(zone, "pallet", { type: "uk" }, x, y, zz, PI / 2);
+  const at = rot(x, zz, PI / 2);
+  if (rec.type === "consumables") {
+    const grid = [[-0.305, -0.23], [0.305, -0.23], [-0.305, 0.23], [0.305, 0.23]], layers = Math.max(1, Math.min(2, Math.floor(maxH / H.parcelM)));
+    for (let l = 0; l < layers; l++) for (const [gx, gz] of grid) { const [px, pz] = at(gx, gz); loose(zone, "parcelM", px, y + 0.144 + l * H.parcelM, pz, PI / 2); }
+    return 0.144 + layers * H.parcelM;
+  }
+  const n = Math.min((rec.totes || []).length || 12, 4 * Math.floor((maxH - 0.15) / 0.3)), grid = [[-0.3, -0.2], [0.3, -0.2], [-0.3, 0.2], [0.3, 0.2]];
+  for (let i = 0; i < n; i++) { const [px, pz] = at(grid[i % 4][0], grid[i % 4][1]); put(zone, "toteLow", { colour: rec.toteColour || (rec.type === "jobber" ? "red" : "pink") }, px, y + 0.144 + Math.floor(i / 4) * 0.3, pz, PI / 2); }
+  return 0.144 + Math.ceil(n / 4) * 0.3;
+}
+function buildStorage() {
+  const r = AREAS.storage, z = "storage";
+  const levels = [0, ...ST.beamLevels], height = ST.beamLevels[ST.beamLevels.length - 1] + 1.4;
+  const rows = ST.rackRows, bays = ST.bays, cap = rows * bays * levels.length * 2;
+  for (let row = 1; row <= rows; row++) for (let b = 1; b <= bays; b++) put(z, "rack", { levels: ST.beamLevels, height: +height.toFixed(2) }, rackBayX(b), 0, rackRowZ(row).z);
+  // painted location labels on the aisle floor every 5 bays
+  let used = 0;
+  for (const rec of RSTOCK.pallets) {
+    const m = /R(\d+)-B(\d+)-L(\d+)-([AB])/.exec(rec.location || ""); if (!m) continue;
+    const row = +m[1], bay = +m[2], li = +m[3], pos = m[4];
+    if (row < 1 || row > rows || bay < 1 || bay > bays || li >= levels.length) continue;
+    const { z: zz, face } = rackRowZ(row), x = rackBayX(bay) + (pos === "A" ? -0.66 : 0.66), y = levels[li];
+    const clear = (li + 1 < levels.length ? levels[li + 1] - 0.15 : y + 1.4) - y - 0.2;
+    beginItem();
+    const h = stockPallet(z, rec, x, y, zz, clear);
+    hoverables.push({ kind: "stock", rec, zone: z, x, y: y + h / 2, z: zz, w: 1.06, h, d: 1.22, parts: endItem(), lift: true, slide: face });
+    used++;
+  }
+  ZONE_STATS_EXTRA.storage = { capacity: cap, used };
+  return [["Rack rows", rows], ["Bays", rows * bays], ["Pallet spaces", cap], ["In use", used], ["Free", cap - used], ["Occupied", Math.round(100 * used / cap) + "%"]];
+}
+const ZONE_STATS_EXTRA = {};
+
+const BUILD = { inbound: buildInbound, conveyor: buildConveyor, manual: buildManual, hanging: buildHanging, hangstore: buildHangStore, storage: buildStorage, despatch: buildDespatch };
+const ZONE_TEXT = {
+  inbound: "All inbound arrives in roll cages through the inbound doors on the west wall. Hover a cage to see where it came from, when it arrived and what is in it.",
+  conveyor: `Cages are tipped onto a low induction belt, which turns and climbs an incline to a loop sorter at ${CV.sorterHeight} m. ${CV.chutes} chutes drop from both sides of the loop to ${CV.chutes * CV.benchesPerChute} pack benches. Packed totes leave on floor roller lines to the tote-out spurs in the south-west corner, which face despatch.`,
+  manual: "Benches for returns that cannot go down the conveyor: oversized, damaged or needing a closer check.",
+  hanging: "Garment rails along the back wall for hanging processing, with benches along the front.",
+  hangstore: "Dense hanging storage in the north-east corner. Every garment has a unique ID and a rail slot location (HS-R03-S041 = rail 3, slot 41).",
+  storage: "Pallet racking along the south wall: consumables in boxes, red tote pallets for Jobber (grade C) and pink tote pallets for dropship vendors. Every pallet and tote has a unique ID, and every space has a location ID (R03-B12-L2-A = row 3, bay 12, level 2, position A; L0 is the floor).",
+  despatch: `${DS.lines} despatch lanes off the west-wall doors. Each pallet holds ${DS.totesPerPallet} totes. Hover a pallet to see where it is going and what is on it.`
+};
+
+/* =========================================================================
+   Viewer
+   ========================================================================= */
+const viewport = document.getElementById("viewport");
+const renderer = new T.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.outputEncoding = T.sRGBEncoding;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFShadowMap;
+renderer.shadowMap.autoUpdate = false;           // the scene is static: shadows are drawn once
+viewport.appendChild(renderer.domElement);
+const scene = new T.Scene();
+const camera = new T.PerspectiveCamera(38, 1, 2, 1000)   // near plane at 2 m: more depth precision for floor paint;
+const controls = new T.OrbitControls(camera, renderer.domElement);
+controls.enabled = false;                       // locked by default; the "Free camera" button unlocks it
+controls.enableDamping = true; controls.dampingFactor = 0.1; controls.maxPolarAngle = PI * 0.47; controls.minDistance = 4; controls.maxDistance = 450;
+scene.add(new T.HemisphereLight(0xffffff, 0x8a8f94, 0.7));
+const sun = new T.DirectionalLight(0xffffff, 0.85);
+sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.04;
+scene.add(sun, sun.target);
+scene.add(world);
+
+/* Render only when something changed. */
+let dirty = true;
+const invalidate = () => { dirty = true; };
+controls.addEventListener("change", invalidate);
+
+let hitMesh = null, hoverBox = null, selBox = null;
+function build() {
+  const stats = {};
+  for (const z of ZONES) stats[z.id] = BUILD[z.id]();
+  flushInstances();
+  const floorTex = canvasTex(256, 256, (g, w, h) => { g.fillStyle = "#ffffff"; g.fillRect(0, 0, w, h); g.fillStyle = "rgba(0,0,0,0.07)"; g.fillRect(0, 0, w, 3); g.fillRect(0, 0, 3, h); });
+  floorTex.wrapS = floorTex.wrapT = T.RepeatWrapping; floorTex.repeat.set(BW / 6, BD / 6);
+  const floorMat = std(css("--floor"), { map: floorTex, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4 });
+  const floor = new T.Mesh(new T.PlaneGeometry(BW, BD), floorMat);
+  floor.rotation.x = -PI / 2; floor.position.set(BW / 2, 0, -BD / 2); floor.receiveShadow = true; world.add(floor);
+  const wallMat = std(css("--wall"), { roughness: 0.9 }), wh = C.site.wallHeight, t = 0.3;
+  const wall = (w, h, d, x, y, z) => { const m = bx(w, h, d, wallMat, x, y, z); m.receiveShadow = true; world.add(m); };
+  wall(BW + t * 2, wh, t, BW / 2, wh / 2, -BD - t / 2);            // north
+  wall(t, wh, BD, BW + t / 2, wh / 2, -BD / 2);                     // east
+  wall(BW + t * 2, 1.2, t, BW / 2, 0.6, t / 2);                     // south, cut away so the view can see in
+  // west wall with openings at the doors (header above each)
+  const gaps = doorZ.map(z => [z - D.width / 2 - 0.3, z + D.width / 2 + 0.3]).sort((a, b) => a[0] - b[0]);
+  let z = -BD;
+  for (const [a, b] of [...gaps, [t, t]]) {
+    if (a > z) wall(t, wh, a - z, -t / 2, wh / 2, (a + z) / 2);
+    if (b > a) wall(t, wh - D.height - 0.5, b - a, -t / 2, (wh + D.height + 0.5) / 2, (a + b) / 2);
+    z = Math.max(z, b);
+  }
+  // aisle lines between the three columns
+  for (const x of [xM - gapX / 2, xE - gapX / 2]) { const m = new T.Mesh(new T.PlaneGeometry(0.1, BD - 3), M.yellow); m.rotation.x = -PI / 2; m.position.set(x, 0.008, -BD / 2); world.add(m); }
+  // zone floor tints and outlines
+  for (const zdef of ZONES) {
+    zdef.tints = []; zdef.lines = [];
+    for (const r of rects[zdef.id]) {
+      const w = r.x1 - r.x0, d = r.z1 - r.z0;
+      const tint = new T.Mesh(new T.PlaneGeometry(w, d), new T.MeshBasicMaterial({ color: zdef.color, transparent: true, opacity: 0.16, depthWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }));
+      // polygonOffset keeps the tint just behind painted aprons and lane lines, so they never fight for the same pixels
+      tint.rotation.x = -PI / 2; tint.position.set(r.x0 + w / 2, 0.004, r.z0 + d / 2); tint.renderOrder = -1; world.add(tint);
+      const pts = [[r.x0, r.z0], [r.x1, r.z0], [r.x1, r.z1], [r.x0, r.z1]].map(([a, b]) => new T.Vector3(a, 0.03, b));
+      const line = new T.LineLoop(new T.BufferGeometry().setFromPoints(pts), new T.LineBasicMaterial({ color: zdef.color, transparent: true, opacity: 0.7 }));
+      world.add(line); zdef.tints.push(tint); zdef.lines.push(line);
+      // Glowing outline shown when the area is hovered or focused: four thin strips in the zone colour
+      zdef.glowMat = zdef.glowMat || new T.MeshBasicMaterial({ color: zdef.color, transparent: true, opacity: 0, depthWrite: false });
+      const t = 0.35, y = 0.06;
+      for (const [sx, sz, cx, cz] of [[w + t, t, r.x0 + w / 2, r.z0], [w + t, t, r.x0 + w / 2, r.z1], [t, d + t, r.x0, r.z0 + d / 2], [t, d + t, r.x1, r.z0 + d / 2]]) {
+        const g = new T.Mesh(new T.BoxGeometry(sx, 0.04, sz), zdef.glowMat); g.position.set(cx, y, cz); g.renderOrder = 2; g.visible = false; world.add(g);
+        (zdef.glow = zdef.glow || []).push(g);
+      }
+    }
+    zdef.stats = stats[zdef.id];
+  }
+  world.position.set(-BW / 2, 0, BD / 2);
+  for (const zdef of ZONES) {
+    const rs = rects[zdef.id];
+    zdef.box = { x0: Math.min(...rs.map(r => r.x0)) - BW / 2, x1: Math.max(...rs.map(r => r.x1)) - BW / 2, z0: Math.min(...rs.map(r => r.z0)) + BD / 2, z1: Math.max(...rs.map(r => r.z1)) + BD / 2 };
+    const r0 = rs[0]; zdef.anchorAt = [(r0.x0 + r0.x1) / 2 - BW / 2, (r0.z0 + r0.z1) / 2 + BD / 2];
+  }
+  // hover targets: one invisible box per hoverable item, all in one instanced mesh
+  if (hoverables.length) {
+    hitMesh = new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), new T.MeshBasicMaterial({ visible: false }), hoverables.length);
+    const m4 = new T.Matrix4(), q = new T.Quaternion();
+    hoverables.forEach((h, i) => hitMesh.setMatrixAt(i, m4.compose(new T.Vector3(h.x, h.y, h.z), q, new T.Vector3(h.w, h.h, h.d))));
+    hitMesh.frustumCulled = false; world.add(hitMesh);
+    hitMesh.updateMatrixWorld(true);
+    hoverBox = new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(1, 1, 1)), new T.LineBasicMaterial({ color: 0xf2b705, depthTest: false, transparent: true }));
+    hoverBox.renderOrder = 10; hoverBox.visible = false; world.add(hoverBox);
+    selBox = new T.LineSegments(hoverBox.geometry, new T.LineBasicMaterial({ color: 0xf2b705, depthTest: false, transparent: true }));
+    selBox.renderOrder = 11; selBox.visible = false; world.add(selBox);
+  }
+  const e = Math.max(BW, BD) * 0.62;
+  Object.assign(sun.shadow.camera, { left: -e, right: e, top: e, bottom: -e, near: 1, far: 400 }); sun.shadow.camera.updateProjectionMatrix();
+  sun.position.set(-BW * 0.25, 90, BD * 0.6); sun.target.position.set(0, 0, 0); sun.target.updateMatrixWorld();
+  renderer.shadowMap.needsUpdate = true;
+  return { floorMat, wallMat };
+}
+
+/* ---------- Framing: eagle-eye view from the south side, angled down ---------- */
+const EL = 50 * PI / 180, AZ = -12 * PI / 180;
+const ALL = { x0: -BW / 2, x1: BW / 2, z0: -BD / 2, z1: BD / 2 };
+/* The glass panels cover the edges of the canvas, so framing uses the free area between them. */
+let inset = { l: 0, r: 0, b: 0 };
+const WIDE = new Set(["storage", "hangstore"]);       // sections whose detail panel opens wide
+let pendingWide = null;
+function expandWide() {
+  if (!pendingWide || pendingWide !== current) return;
+  pendingWide = null;
+  document.querySelector(".app").classList.add("wide");
+  renderPanel();
+}
+function hudInsets() {
+  const dk = document.getElementById("dock"), sd = document.getElementById("dock-stock");
+  if (!dk || getComputedStyle(dk).position !== "absolute" && getComputedStyle(sd).position !== "absolute") return { l: 0, r: 0, b: 0 };
+  // Measured from layout sizes, not live rectangles, so a panel mid-transition can't skew the framing.
+  // Storage sections frame their area in the space left of the half-width pop-out, above the stock cards.
+  const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), gap = 16;
+  const l = Math.max(0, L.right - st.left);
+  // Hanging storage frames its area left of the half-width pop-out; Storage zooms in as usual and the pop-out covers it.
+  if (current === "hangstore") return { l, r: Math.round(viewport.clientWidth / 2) + gap, b: sd.offsetHeight + gap };
+  if (current === "storage") return { l, r: parseFloat(css("--right-w")) + 2 * gap, b: sd.offsetHeight + gap };
+  return { l, r: parseFloat(css("--right-w")) + 2 * gap, b: dk.offsetHeight + gap };
+}
+function viewFor(b) {
+  const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, sx = b.x1 - b.x0, sz = b.z1 - b.z0;
+  const vw = Math.max(1, viewport.clientWidth), vh = Math.max(1, viewport.clientHeight);
+  const fw = Math.max(0.3, (vw - inset.l - inset.r) / vw), fh = Math.max(0.3, (vh - inset.b) / vh);
+  const fov = camera.fov * PI / 180, tanV = Math.tan(fov / 2) * fh, tanH = Math.tan(fov / 2) * camera.aspect * fw;
+  const halfV = (sz / 2) * Math.sin(EL) + 3 * Math.cos(EL), halfH = (sx / 2) * Math.cos(AZ) + (sz / 2) * Math.abs(Math.sin(AZ));
+  const dist = Math.max(halfV / tanV, halfH / tanH) * 1.1 + (sz / 2) * Math.cos(EL) * 0.35;
+  const target = new T.Vector3(cx, 0, cz);
+  const dir = new T.Vector3(Math.sin(AZ) * Math.cos(EL), Math.sin(EL), Math.cos(AZ) * Math.cos(EL));
+  return { target, pos: target.clone().addScaledVector(dir, dist) };
+}
+/* The camera holds a framed view (base) and only drifts a little with the pointer.
+   "Free camera" hands it back to orbit controls. */
+let tween = null, freeCam = false;
+const base = { pos: new T.Vector3(), target: new T.Vector3() };
+const par = { x: 0, y: 0, tx: 0, ty: 0 }, PAR_AZ = 0.045, PAR_EL = 0.03;   // radians at the screen edge (~2.5° and ~1.7°)
+const _sph = new T.Spherical(), _off = new T.Vector3();
+function applyCam() {
+  if (freeCam) { camera.position.copy(base.pos); controls.target.copy(base.target); controls.update(); return; }
+  _off.subVectors(base.pos, base.target); _sph.setFromVector3(_off);
+  _sph.theta -= par.x * PAR_AZ; _sph.phi = Math.min(PI * 0.47, Math.max(0.1, _sph.phi + par.y * PAR_EL));
+  camera.position.copy(base.target).add(_off.setFromSpherical(_sph));
+  controls.target.copy(base.target); camera.lookAt(base.target);
+}
+function flyTo(b, instant) {
+  const v = viewFor(b);
+  if (freeCam) { base.pos.copy(camera.position); base.target.copy(controls.target); }
+  if (instant || reduceMotion) { base.pos.copy(v.pos); base.target.copy(v.target); tween = null; applyCam(); invalidate(); return; }
+  tween = { t: 0, p0: base.pos.clone(), t0: base.target.clone(), p1: v.pos, t1: v.target, o0: { ...offCur } };
+  invalidate();
+}
+
+/* ---------- Focus / dimming (colour only, so no shader recompiles) ---------- */
+let current = "all", greyCol = new T.Color(), shell;
+function setFocus(id, instant) {
+  current = id;
+  // Storage sections: zoom in first, then the wide panel expands (see expandWide)
+  const app = document.querySelector(".app");
+  app.classList.remove("wide"); setMini(false);
+  pendingWide = WIDE.has(id) ? id : null;
+  // Storage sections swap the bottom cards for their stockholding cards (left of the pop-out)
+  app.classList.toggle("stockmode", WIDE.has(id));
+  if (WIDE.has(id)) renderStockDock(id);
+  animOff = !instant && !reduceMotion;
+  resize();
+  recolour();
+  dispatchEvent(new CustomEvent("asc-map-focus", { detail: id }));
+  hideTip();
+  flyTo(id === "all" ? ALL : Z[id].box, instant);
+  if (!animOff) { offCur = { ...offTo }; applyOffset(); }
+  animOff = false;
+  if (pendingWide && (instant || reduceMotion)) expandWide();
+  document.querySelectorAll("#sections button").forEach(b => { const on = b.dataset.id === id; b.setAttribute("aria-pressed", String(on)); if (on && !instant) b.scrollIntoView({ block: "nearest", inline: "nearest" }); });
+  renderPanel();
+  moveNavInd();
+  dockEl.querySelectorAll(".kpi").forEach(k => k.classList.toggle("on", k.dataset.id === id));
+  try { history.replaceState(null, "", id === "all" ? location.pathname + location.search : "#" + id); } catch (e) {}
+  invalidate();
+}
+/* Grey out every zone except the focused one (colour only, keeps the camera where it is). */
+let hoverZone = null;
+function recolour() {
+  const id = current;
+  for (const z of ZONES) {
+    const on = z.id === id, hot = z.id === hoverZone && !on, dim = id !== "all" && !on;
+    for (const r of zoneMats[z.id]) {
+      const m = r.mat;
+      if (dim) { m.color.copy(r.color).lerp(greyCol, hot ? 0.35 : r.map ? 0.65 : 0.8); if (r.emissive) m.emissive.setRGB(0, 0, 0); }
+      else { m.color.copy(r.color); if (hot) m.color.multiplyScalar(1.18); if (r.emissive) m.emissive.copy(r.emissive); }
+    }
+    z.tints.forEach(t => t.material.opacity = hot ? 0.42 : dim ? 0.04 : on ? 0.3 : 0.16);
+    z.lines.forEach(l => l.material.opacity = hot || !dim ? 1 : 0.15);
+    z.glowMat.opacity = hot ? 0.95 : on ? 0.6 : 0;
+    z.glow.forEach(g => g.visible = hot || on);
+    z.label.classList.toggle("dim", dim && !hot);
+    z.label.classList.toggle("hot", hot);
+  }
+  invalidate();
+}
+function setHoverZone(id) {
+  if (id === hoverZone) return;
+  hoverZone = id; recolour();
+}
+
+/* ---------- UI ---------- */
+const dockEl = document.getElementById("dock"), sectionsEl = document.getElementById("sections"), panel = document.getElementById("panel"), labelsEl = document.getElementById("labels"), tip = document.getElementById("tip");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function renderSections() {
+  const btn = (id, name, color, key) => `<button data-id="${id}" aria-pressed="false" title="Shortcut: ${key}" style="--c:${color || "var(--accent)"}"><span class="dot"></span><span>${name}</span><kbd>${key}</kbd></button>`;
+  sectionsEl.innerHTML = `<span class="nav-ind" aria-hidden="true"></span>` + btn("all", "View all", null, "0") + ZONES.map(z => btn(z.id, z.name, z.color, z.key)).join("");
+  sectionsEl.addEventListener("click", e => { const b = e.target.closest("button"); if (b) setFocus(b.dataset.id); });
+}
+/* Sliding highlight behind the active section. */
+function moveNavInd() {
+  const b = sectionsEl.querySelector('button[aria-pressed="true"]'), ind = sectionsEl.querySelector(".nav-ind");
+  if (!b || !ind) return;
+  ind.style.transform = `translateY(${b.offsetTop}px)`; ind.style.height = b.offsetHeight + "px";
+  ind.style.setProperty("--c", current === "all" ? "var(--accent)" : Z[current].color);
+}
+function renderPanel() {
+  const guessNote = `<p class="guess">Placement is a first guess. Send the floor plan and this zone will be moved to match.</p>`;
+  const dataNote = `<p class="notes">Data: <b>${esc(DATA.source || "Unknown source")}</b>${DATA.asOf ? `, as of ${esc(fmtTime(DATA.asOf))}` : ""}, from <code>js/sample-data.js</code>.</p>`;
+  if (current === "all") {
+    const sx = ZONE_STATS_EXTRA.storage || {};
+    const totals = [["Bay doors", D.count], ["Despatch lines", DS.lines], ["Chutes", CV.chutes], ["Pack benches", CV.chutes * CV.benchesPerChute], ["Pallet spaces", sx.capacity || 0], ["Pallets stored", sx.used || 0]];
+    panel.innerHTML = `<div><div class="kicker">Whole site</div><h2>${esc(C.site.name)}</h2>
+      <p class="blurb">Single floor, about ${Math.round(BW)} × ${Math.round(BD)} m. All bay doors are on the west wall, on the left of the view.</p></div>
+      <div><h3>Headline counts</h3><div class="stats">${totals.map(([l, v]) => `<div class="stat"><b data-count="${v}">${v}</b><span>${l}</span></div>`).join("")}</div></div>
+      <p class="notes">Pick a section on the left, or a card along the bottom. Hover or click a cage, pallet or pack bench for its details. Hover an area to light it up, click it to open that section. Keys 0–7 also switch section. Turn on Orbit to rotate, zoom and pan freely.</p>
+      <p class="notes">Doors ${doorsIn > 1 ? "1–" + doorsIn : "1"} are shown as inbound and the rest as despatch. That split is a guess. All counts live in <code>js/layout-config.js</code>.</p>${dataNote}`;
+  } else if (WIDE.has(current) && document.querySelector(".app").classList.contains("wide")) {
+    panel.innerHTML = stockPanelHTML(current);
+    wireStockPanel(current);
+  } else {
+    const z = Z[current], cfg = C[current] || {};
+    panel.innerHTML = `<button class="btn back" id="back-all">← Back to view all</button>
+      <div><div class="kicker"><span class="swatch" style="background:${z.color};color:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[current]}</p></div>
+      <div><h3>In this section</h3><div class="stats">${z.stats.map(([l, v]) => `<div class="stat"><b${typeof v === "number" ? ` data-count="${v}"` : ""}>${v}</b><span>${l}</span></div>`).join("")}</div></div>
+      ${current === "conveyor" ? `<p class="notes">Today's output by grade and route is in the cards along the bottom. Click a pack bench to see its own output.</p>` : ""}
+      ${cfg.guess ? guessNote : ""}
+      ${current === "inbound" || current === "despatch" || current === "conveyor" ? dataNote : `<p class="notes">Area about ${Math.round(z.box.x1 - z.box.x0)} × ${Math.round(z.box.z1 - z.box.z0)} m. Fill levels are illustrative until live data is connected.</p>`}`;
+    panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
+  }
+  [...panel.children].forEach((c, i) => c.style.setProperty("--i", i));
+  panel.scrollTop = 0;
+  countUp(panel);
+}
+/* ---------- Wide stock panel for Storage and Hanging storage ----------
+   Cards with total stockholding, split charts, then a searchable table of every SKU line. */
+const fmtShort = s => { const d = new Date(s); return isNaN(d) ? (s || "") : d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" }); };
+const daysIn = s => Math.max(0, Math.floor((new Date(DATA.stock.asOf || DATA.asOf || Date.now()) - new Date(s)) / 864e5));
+const AGE = [["0–7", 7], ["8–14", 14], ["15–30", 30], ["31–60", 60], ["61–90", 90], ["90+", 1e9]];
+const tally = (list, key, val = () => 1) => { const o = {}; for (const x of list) { const k = key(x); if (k != null) o[k] = (o[k] || 0) + val(x); } return o; };
+function rankBars(o, colour) {
+  const rows = Object.entries(o).sort((a, b) => b[1] - a[1]), max = Math.max(1, ...rows.map(r => r[1])), total = rows.reduce((a, r) => a + r[1], 0);
+  return `<ul class="bars"${colour ? ` style="--bar:${colour}"` : ""}>${rows.map(([n, v], j) => `<li style="--j:${j}" title="${esc(n)}: ${n0(v)} (${pct(v, total)})"><span class="bn">${esc(n)}</span><span class="bt"><span style="width:${(100 * v / max).toFixed(1)}%"></span></span><b>${n0(v)}</b></li>`).join("")}</ul>`;
+}
+function plainCols(labels, values, unit, what) {
+  const max = Math.max(1, ...values);
+  return `<div class="cols tall" role="img" aria-label="${what}: ${labels.map((l, j) => `${l} ${values[j]}`).join(", ")}">${values.map((v, j) => `<span style="height:${(100 * v / max).toFixed(1)}%;--j:${j}" title="${labels[j]}: ${v}" data-r="${labels[j]} · ${n0(v)} ${unit}"></span>`).join("")}</div>
+    <div class="axis labels">${labels.map(x => `<span>${x}</span>`).join("")}</div><div class="axis"><span></span><span class="read" aria-live="polite"></span><span></span></div>`;
+}
+const stockCache = {};
+function stockModel(kind) {
+  if (stockCache[kind]) return stockCache[kind];
+  const rows = [];
+  let m;
+  if (kind === "storage") {
+    const P = RSTOCK.pallets, cap = (ZONE_STATS_EXTRA.storage || {}).capacity || 1000;
+    for (const p of P) {
+      const base = { type: p.type, owner: owner(p), pallet: p.id, loc: p.location, delivered: p.deliveredAt, scanned: p.scannedAt, ref: p.id };
+      if (p.totes) for (const t of p.totes) for (const l of t.lines) rows.push({ ...base, sku: l.sku, desc: l.description, qty: l.qty, tote: t.id });
+      else for (const l of p.lines || []) rows.push({ ...base, sku: l.sku, desc: l.description, qty: l.qty, tote: "" });
+    }
+    const by = t => P.filter(p => p.type === t), totes = list => list.reduce((a, p) => a + (p.totes ? p.totes.length : 0), 0), units = list => list.reduce((a, p) => a + stockUnits(p), 0);
+    const J = by("jobber"), Dp = by("dropship"), Cn = by("consumables"), vendors = new Set(Dp.map(p => p.vendor)).size;
+    const ages = AGE.map(() => 0); for (const p of P) { const d = daysIn(p.scannedAt); ages[AGE.findIndex(a => d <= a[1])]++; }
+    const lines = list => list.flatMap(p => p.totes ? p.totes.flatMap(t => t.lines) : p.lines || []);
+    m = {
+      rows, ownerTypes: ["jobber", "dropship", "consumables"], idLabel: "Pallet", hasTote: true,
+      cards: [
+        { t: "jobber", label: "Jobber", big: units(J), unit: "units", sub: `grade C · <b>${J.length}</b> red tote pallets · <b>${n0(totes(J))}</b> totes` },
+        { t: "dropship", label: "Dropship vendors", big: units(Dp), unit: "units", sub: `<b>${Dp.length}</b> pink tote pallets · <b>${n0(totes(Dp))}</b> totes · <b>${vendors}</b> vendors` },
+        { t: "consumables", label: "Consumables", big: units(Cn), unit: "cases", sub: `<b>${Cn.length}</b> pallets · <b>${new Set(lines(Cn).map(l => l.sku)).size}</b> product lines` },
+        { t: "cap", label: "Racking capacity", big: P.length, of: cap, unit: "pallets", segs: [["jobber", J.length], ["dropship", Dp.length], ["consumables", Cn.length]], sub: `<b>${pct(P.length, cap)}</b> full · <b>${n0(cap - P.length)}</b> free spaces` }
+      ],
+      charts: [
+        { title: "Dropship units by vendor", body: rankBars(tally(Dp, p => p.vendor, stockUnits), STOCK_COL.dropship), scroll: true, wide: true },
+        { title: "Jobber units by category", body: rankBars(tally(lines(J), l => l.category, l => +l.qty || 0), STOCK_COL.jobber) },
+        { title: "Consumables cases by item", body: rankBars(tally(lines(Cn), l => (l.description || "").replace(/ \(.*/, ""), l => +l.qty || 0), STOCK_COL.consumables), scroll: true },
+        { title: "Pallets by days in location", body: plainCols(AGE.map(a => a[0]), ages, "pallets", "Pallets by days since scanned into location") }
+      ]
+    };
+  } else {
+    const G = HSTOCK.garments, cap = (HSTOCK.rails || HG.storageRails) * Math.min(HSTOCK.slotsPerRail || hangSlots, hangSlots);
+    for (const g of G) rows.push({ type: g.type, owner: owner(g), pallet: g.id, loc: g.location, delivered: g.deliveredAt, scanned: g.scannedAt, ref: g.id, sku: g.sku, desc: g.description, qty: 1, tote: "" });
+    const J = G.filter(g => g.type === "jobber"), Dp = G.filter(g => g.type === "dropship"), vendors = new Set(Dp.map(g => g.vendor)).size;
+    const rails = HSTOCK.rails || HG.storageRails, perRail = Array(rails).fill(0);
+    for (const g of G) { const k = /HS-R(\d+)/.exec(g.location); if (k && +k[1] <= rails) perRail[+k[1] - 1]++; }
+    const ages = AGE.map(() => 0); for (const g of G) { const d = daysIn(g.scannedAt); ages[AGE.findIndex(a => d <= a[1])]++; }
+    m = {
+      rows, ownerTypes: ["jobber", "dropship"], idLabel: "Garment ID", hasTote: false,
+      cards: [
+        { t: "jobber", label: "Jobber", big: J.length, unit: "garments", sub: `grade C · <b>${new Set(J.map(g => g.sku)).size}</b> SKUs` },
+        { t: "dropship", label: "Dropship vendors", big: Dp.length, unit: "garments", sub: `<b>${vendors}</b> vendors · <b>${new Set(Dp.map(g => g.sku)).size}</b> SKUs` },
+        { t: "total", label: "Total hanging stock", big: G.length, unit: "garments", sub: `on <b>${rails}</b> rails` },
+        { t: "cap", label: "Rail capacity", big: G.length, of: cap, unit: "slots", segs: [["jobber", J.length], ["dropship", Dp.length]], sub: `<b>${pct(G.length, cap)}</b> full · <b>${n0(cap - G.length)}</b> free slots` }
+      ],
+      charts: [
+        { title: "Dropship garments by vendor", body: rankBars(tally(Dp, g => g.vendor), STOCK_COL.dropship), scroll: true, wide: true },
+        { title: "Jobber garments by category", body: rankBars(tally(J, g => g.category), STOCK_COL.jobber) },
+        { title: "Garments by rail", body: plainCols(perRail.map((_, i) => "R" + (i + 1)), perRail, "garments", "Garments per storage rail") },
+        { title: "Garments by days in location", body: plainCols(AGE.map(a => a[0]), ages, "garments", "Garments by days since scanned into location") }
+      ]
+    };
+  }
+  return (stockCache[kind] = m);
+}
+/* Stockholding cards along the bottom, left of the pop-out, in the same format as the home cards. */
+const stockDockEl = document.getElementById("dock-stock");
+let stockDockFor = null;
+function renderStockDock(kind) {
+  if (stockDockFor === kind) return;
+  stockDockFor = kind;
+  const z = Z[kind], m = stockModel(kind);
+  stockDockEl.innerHTML = m.cards.map((c, i) => {
+    const col = STOCK_COL[c.t] || z.color;
+    const seg = c.segs ? `<div class="seg-bar cap" role="img" aria-label="${c.segs.map(([t, v]) => `${STOCK_NAME[t]} ${v}`).join(", ")}, free ${c.of - c.big}">${c.segs.map(([t, v]) => v ? `<span style="flex:${v};background:${STOCK_COL[t]}" title="${STOCK_NAME[t]}: ${v}"></span>` : "").join("")}<span class="free" style="flex:${Math.max(0, c.of - c.big)}"></span></div>` : "";
+    return `<div class="kpi glass" role="button" tabindex="0" style="--c:${col};--i:${i}"><div class="kh"><span class="dot"></span>${c.label}</div>
+      <div><b class="big" data-count="${c.big}">${n0(c.big)}</b>${c.of ? `<span class="of"> / ${n0(c.of)}</span>` : ""}</div>
+      <div class="sub">${c.unit}${c.sub ? " · " + c.sub : ""}</div>${seg}</div>`;
+  }).join("");
+  countUp(stockDockEl);
+}
+stockDockEl.addEventListener("click", e => {
+  const k = e.target.closest(".kpi"); if (!k) return;
+  const part = e.target.closest(".seg-bar span");
+  if (part) selectPart(k, part); else replay(k);
+});
+function stockPanelHTML(kind) {
+  const z = Z[kind], m = stockModel(kind);
+  const chips = [["all", "All"], ...m.ownerTypes.map(t => [t, STOCK_NAME[t]])];
+  const cols = [["sku", "SKU"], ["desc", "Description"], ["qty", "Qty"], ["owner", "Stock"], ...(m.hasTote ? [["tote", "Tote ID"]] : []), ["pallet", m.idLabel], ["loc", "Location"], ["delivered", "Delivered to site"], ["scanned", "Scanned into location"]];
+  return `<div class="sp-bar"><button class="btn back" id="back-all">← Back to view all</button><button class="btn back" id="sp-min" title="Hide the panel and keep the zoomed view">Minimise panel →</button></div>
+    <div class="sp-head"><div><div class="kicker"><span class="swatch" style="background:${z.color};color:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[kind]}</p></div>
+      <p class="notes">${esc(DATA.source || "Sample data")}${DATA.stock.asOf ? `, as of ${esc(fmtTime(DATA.stock.asOf))}` : ""}. From <code>js/sample-stock.js</code>.</p></div>
+    <div class="sp-charts">${m.charts.map(c => `<div class="cbox${c.wide ? " wide" : ""}" style="--c:${z.color}"><h3>${c.title}</h3><div class="${/class="cols/.test(c.body) ? "" : "scroll"}">${c.body}</div></div>`).join("")}</div>
+    <div class="sp-table">
+      <div class="sp-tools"><h3>Stock detail</h3>
+        <input type="search" id="sp-q" placeholder="Search SKU, item, ID, location or vendor" aria-label="Search stock">
+        <div class="chips" role="group" aria-label="Filter by stock">${chips.map(([t, n], i) => `<button class="chip" data-t="${t}" aria-pressed="${i === 0}">${n}</button>`).join("")}</div>
+        <span class="count" id="sp-count"></span></div>
+      <table class="stock"><thead><tr>${cols.map(([k, n]) => `<th data-k="${k}"${k === "qty" ? ' class="num"' : ""}><button>${n}</button></th>`).join("")}</tr></thead><tbody id="sp-body"></tbody></table>
+      <button class="btn more" id="sp-more" hidden>Show more</button>
+    </div>`;
+}
+const tableState = {}, PREVIEW_ROWS = 12;   // the table shows a preview until it is expanded
+function wireStockPanel(kind) {
+  const m = stockModel(kind), st = tableState[kind] = tableState[kind] || { q: "", t: "all", k: "loc", dir: 1, limit: 150, open: false };
+  const body = panel.querySelector("#sp-body"), q = panel.querySelector("#sp-q"), more = panel.querySelector("#sp-more"), count = panel.querySelector("#sp-count");
+  q.value = st.q;
+  panel.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.t === st.t)));
+  const draw = () => {
+    const needle = st.q.trim().toLowerCase();
+    let rows = m.rows.filter(r => (st.t === "all" || r.type === st.t) && (!needle || `${r.sku} ${r.desc} ${r.owner} ${r.tote} ${r.pallet} ${r.loc}`.toLowerCase().includes(needle)));
+    const k = st.k; rows = rows.slice().sort((a, b) => (k === "qty" ? a[k] - b[k] : String(a[k]).localeCompare(String(b[k]))) * st.dir);
+    const shown = rows.slice(0, st.open ? st.limit : PREVIEW_ROWS);
+    body.innerHTML = shown.map(r => `<tr data-ref="${esc(r.ref)}" tabindex="0"><td class="mono">${esc(r.sku)}</td><td title="${esc(r.desc)}">${esc(r.desc)}</td><td class="num">${n0(r.qty)}</td><td><span class="own" style="--c:${STOCK_COL[r.type]}"></span>${esc(r.owner)}</td>${m.hasTote ? `<td class="mono">${esc(r.tote || "–")}</td>` : ""}<td class="mono">${esc(r.pallet)}</td><td class="mono">${esc(r.loc)}</td><td>${esc(fmtShort(r.delivered))}</td><td>${esc(fmtShort(r.scanned))}</td></tr>`).join("")
+      || `<tr><td colspan="9" class="empty">No stock matches.</td></tr>`;
+    count.textContent = `${n0(shown.length)} of ${n0(rows.length)} lines`;
+    more.hidden = rows.length <= (st.open ? st.limit : PREVIEW_ROWS);
+    more.textContent = st.open ? "Show 300 more" : `Expand table (${n0(rows.length)} lines)`;
+    panel.querySelectorAll("th").forEach(th => th.setAttribute("aria-sort", th.dataset.k === st.k ? (st.dir > 0 ? "ascending" : "descending") : "none"));
+  };
+  q.addEventListener("input", () => { st.q = q.value; st.limit = 150; draw(); });
+  panel.querySelector(".chips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; st.t = c.dataset.t; st.limit = 150; panel.querySelectorAll(".chip").forEach(x => x.setAttribute("aria-pressed", String(x === c))); draw(); });
+  panel.querySelector("thead").addEventListener("click", e => { const th = e.target.closest("th"); if (!th) return; st.dir = st.k === th.dataset.k ? -st.dir : 1; st.k = th.dataset.k; draw(); });
+  more.addEventListener("click", () => { if (st.open) st.limit += 300; else st.open = true; draw(); });
+  const openRef = tr => { const i = HOVER_BY_REF.get(tr.dataset.ref); if (i != null) openCard(i); };
+  body.addEventListener("click", e => { const tr = e.target.closest("tr[data-ref]"); if (tr) openRef(tr); });
+  body.addEventListener("keydown", e => { const tr = e.target.closest("tr[data-ref]"); if (tr && e.key === "Enter") openRef(tr); });
+  draw();
+  panel.querySelector("#back-all").addEventListener("click", () => setFocus("all"));
+  panel.querySelector("#sp-min").addEventListener("click", () => setMini(true));
+}
+/* Minimise: hide the pop-out but stay zoomed into the storage area. */
+function setMini(on) {
+  document.querySelector(".app").classList.toggle("mini", on);
+  document.getElementById("btn-panel").hidden = !on;
+  if (on) document.getElementById("btn-panel").focus();
+}
+document.getElementById("btn-panel").addEventListener("click", () => setMini(false));
+const HOVER_BY_REF = new Map();
+
+/* Charts animate again when clicked. A click on one column, bar or grade picks it out and shows its value. */
+function restartAnim(el) { if (!el) return; el.style.animation = "none"; void el.offsetWidth; el.style.animation = ""; }
+function clearSel(k) { k.classList.remove("has-sel"); k.querySelectorAll(".sel").forEach(x => x.classList.remove("sel")); const r = k.querySelector(".read"); if (r) r.textContent = ""; }
+function flash(k) { k.classList.remove("flash"); void k.offsetWidth; k.classList.add("flash"); }
+function replay(k) {
+  clearSel(k); flash(k);
+  k.querySelectorAll(".cols span, .bt span, .seg-bar").forEach(restartAnim);
+  countUp(k);
+}
+function selectPart(k, part) {
+  const was = part.classList.contains("sel");
+  clearSel(k);
+  if (was) return;
+  k.classList.add("has-sel"); part.classList.add("sel");
+  const g = part.dataset.g;
+  if (g) k.querySelectorAll(`[data-g="${g}"]`).forEach(x => x.classList.add("sel"));
+  if (part.matches(".cols span")) { restartAnim(part); const r = k.querySelector(".read"); if (r) r.textContent = part.dataset.r || ""; }
+  else if (part.matches("ul.bars li")) restartAnim(part.querySelector(".bt span"));
+  else { const seg = k.querySelector(".seg-bar"); seg && seg.querySelectorAll(".sel").forEach(restartAnim); }
+  flash(k);
+}
+/* Numbers count up from zero when a card appears. */
+function countUp(root) {
+  const els = [...root.querySelectorAll("[data-count]")];
+  if (reduceMotion || !els.length) return;
+  const t0 = performance.now(), D_MS = 900;
+  els.forEach(el => el.textContent = "0");
+  const step = now => {
+    const k = Math.min(1, (now - t0) / D_MS), e = 1 - (1 - k) ** 3;
+    for (const el of els) el.textContent = n0(Math.round(+el.dataset.count * e));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+/* Arrivals per hour as small columns. */
+function hourly(times) {
+  const asOf = new Date(DATA.asOf || Date.now()), hrs = times.map(t => new Date(t)).filter(d => !isNaN(d)).map(d => d.getHours());
+  const to = asOf.getHours(), from = Math.min(to, ...hrs), a = Array(to - from + 1).fill(0);
+  for (const h of hrs) if (h >= from && h <= to) a[h - from]++;
+  return { a, from, to };
+}
+function colsHTML({ a, from, to }, what, unit) {
+  const max = Math.max(1, ...a), hh = h => String(h).padStart(2, "0") + ":00";
+  return `<div class="cols" role="img" aria-label="${what} per hour, ${hh(from)} to ${hh(to)}, peak ${max}">${a.map((v, j) => `<span style="height:${(100 * v / max).toFixed(1)}%;--j:${j}" title="${hh(from + j)}: ${v}" data-r="${hh(from + j)} · ${v} ${unit}"></span>`).join("")}</div>
+    <div class="axis"><span>${hh(from)}</span><span class="read" aria-live="polite"></span><span>${hh(to)}</span></div>`;
+}
+/* Bottom dock: today's numbers for inbound, conveyor output (grade and route) and despatch. */
+function renderDock() {
+  const cages = DATA.inboundCages, pals = DATA.despatchPallets, benches = DATA.benchOutput;
+  const units = list => list.reduce((a, r) => a + (r.skus || []).reduce((b, s) => b + (+s.qty || 0), 0), 0);
+  const skus = new Set(cages.flatMap(c => (c.skus || []).map(s => s.sku))).size;
+  const lastIn = cages.map(c => c.deliveredAt).sort().pop();
+  const g = { A: 0, B: 0, C: 0 }, r = {};
+  let open = 0;
+  for (const b of benches) {
+    for (const k in g) g[k] += +(b.grades || {})[k] || 0;
+    for (const [n, v] of Object.entries(b.routes || {})) r[n] = (r[n] || 0) + (+v || 0);
+    if (b.status && b.status !== "Closed") open++;
+  }
+  const totes = pals.reduce((a, p) => a + (+p.totes || 0), 0), lanes = new Set(pals.map(p => p.lane)).size;
+  const hm = s => s ? esc(fmtTime(s).split(", ").pop()) : "–";
+  const card = (id, cls, c, label, body) => `<div class="kpi glass ${cls}" role="button" tabindex="0" data-id="${id}" style="--c:${c}" aria-label="${label}: open ${Z[id].name}">
+      <div class="kh"><span class="dot"></span>${label}<span class="t">Today</span></div>${body}</div>`;
+  const cards = [
+    card("inbound", "", Z.inbound.color, "Inbound", `<b class="big" data-count="${cages.length}">${n0(cages.length)}</b>
+      <div class="sub">cages received · <b>${n0(units(cages))}</b> units · <b>${n0(skus)}</b> SKUs · last at <b>${hm(lastIn)}</b></div>
+      ${colsHTML(hourly(cages.map(c => c.deliveredAt)), "Cages delivered", "cages")}`),
+    card("conveyor", "", Z.conveyor.color, "Conveyor output", benches.length ? `<b class="big" data-count="${sum(g)}">${n0(sum(g))}</b>
+      <div class="sub">units packed · <b>${open}</b> of ${benches.length} benches open</div>${gradeBlock(g)}` : `<div class="sub">No bench output data loaded.</div>`),
+    card("conveyor", "routes", Z.conveyor.color, "Output by despatch route", routeBlock(r)),
+    card("despatch", "", Z.despatch.color, "Despatch", `<b class="big" data-count="${pals.length}">${n0(pals.length)}</b>
+      <div class="sub">pallets built · <b>${n0(totes)}</b> totes · <b>${n0(units(pals))}</b> units · <b>${lanes}</b> of ${DS.lines} lanes</div>
+      ${colsHTML(hourly(pals.map(p => p.builtAt)), "Pallets built", "pallets")}`)
+  ];
+  dockEl.innerHTML = cards.join("");
+  [...dockEl.children].forEach((c, i) => c.style.setProperty("--i", i));
+  dockEl.querySelectorAll("ul.bars li").forEach((li, j) => li.style.setProperty("--j", j));
+  dockEl.addEventListener("click", e => {
+    const k = e.target.closest(".kpi"); if (!k) return;
+    const part = e.target.closest(".cols span, ul.bars li, ul.rows li, .seg-bar span");
+    if (part) selectPart(k, part); else replay(k);
+    if (k.dataset.id !== current) setFocus(k.dataset.id);
+  });
+  dockEl.addEventListener("keydown", e => { const k = e.target.closest(".kpi"); if (k && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setFocus(k.dataset.id); } });
+  countUp(dockEl);
+}
+function makeLabels() {
+  for (const z of ZONES) {
+    const el = document.createElement("div");
+    el.className = "zlabel"; el.style.setProperty("--zc", z.color);
+    el.innerHTML = z.name + (C[z.id] && C[z.id].guess ? `<span class="g">guess</span>` : "");
+    el.addEventListener("click", () => setFocus(z.id));
+    labelsEl.appendChild(el); z.label = el;
+    z.anchor = new T.Vector3(z.anchorAt[0], 4.5, z.anchorAt[1]);
+  }
+}
+const _v = new T.Vector3();
+function placeLabels() {
+  if (labelsEl.hidden) return;
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  for (const z of ZONES) {
+    _v.copy(z.anchor).project(camera);
+    const vis = _v.z < 1 && Math.abs(_v.x) < 1.1 && Math.abs(_v.y) < 1.1;
+    z.label.style.display = vis ? "" : "none";
+    if (vis) z.label.style.transform = `translate(${(_v.x + 1) / 2 * w}px, ${(1 - _v.y) / 2 * h}px) translate(-50%, -100%)`;
+  }
+}
+
+/* ---------- Hover and click on cages, pallets and benches ----------
+   Hover: the item lifts slightly and a compact card follows the pointer.
+   Click: the item pops out (lifts higher) and the full card opens beside it. */
+const ray = new T.Raycaster(), ndc = new T.Vector2(), card = document.getElementById("card");
+const LIFT_HOVER = 0.25, LIFT_OPEN = 1.1;
+let hovered = -1, selected = -1;
+const lifts = new Map();                       // hoverable index -> { cur, target }
+const _m4 = new T.Matrix4();
+function setLift(i, target) {
+  const h = hoverables[i]; if (!h || !h.lift || !h.parts) return;
+  const s = lifts.get(i) || { cur: 0, target: 0 }; s.target = target; lifts.set(i, s); invalidate();
+}
+function applyLift(i, y) {
+  for (const { k, i: idx } of hoverables[i].parts) {
+    const b = buckets.get(k), h = hoverables[i]; _m4.copy(b.list[idx]);
+    if (h.slide) _m4.elements[14] += y * h.slide; else _m4.elements[13] += y;   // rack pallets slide out into the aisle
+    for (const im of b.meshes) { im.setMatrixAt(idx, _m4); im.instanceMatrix.needsUpdate = true; }
+  }
+}
+function stepLifts(dt) {
+  let moving = false;
+  for (const [i, s] of lifts) {
+    const d = s.target - s.cur;
+    s.cur = Math.abs(d) < 0.003 || reduceMotion ? s.target : s.cur + d * Math.min(1, dt * 12);
+    applyLift(i, s.cur);
+    if (s.cur !== s.target) moving = true; else if (s.target === 0) lifts.delete(i);
+  }
+  return moving;
+}
+const liftOf = i => (lifts.get(i) || { cur: 0 }).cur;
+function frameBox(box, i, pad) {
+  const h = hoverables[i];
+  const l = liftOf(i);
+  box.position.set(h.x, h.y + (h.slide ? 0 : l), h.z + (h.slide ? l * h.slide : 0)); box.scale.set(h.w + pad, h.h + pad, h.d + pad); box.visible = true;
+}
+
+const sum = o => Object.values(o || {}).reduce((a, b) => a + (+b || 0), 0);
+const n0 = v => Number(v || 0).toLocaleString("en-GB");
+const pct = (v, t) => t ? Math.round(100 * v / t) + "%" : "–";
+/* Grade split: thin segmented bar + one row per grade with swatch, units and share. */
+function gradeBlock(g) {
+  const total = sum(g), keys = ["A", "B", "C"];
+  return `<div class="seg-bar" role="img" aria-label="Grade split: ${keys.map(k => `${k} ${pct(g[k], total)}`).join(", ")}">${keys.map(k => g[k] ? `<span class="g${k}" data-g="${k}" style="flex:${g[k]}" title="Grade ${k}: ${n0(g[k])}"></span>` : "").join("")}</div>
+    <ul class="rows">${keys.map(k => `<li data-g="${k}"><span class="sw g${k}"></span><span>Grade ${k}</span><b>${n0(g[k])}</b><span class="pc">${pct(g[k], total)}</span></li>`).join("")}</ul>`;
+}
+/* Routes: ranked horizontal bars, one hue, largest first, figures beside each. */
+function routeBlock(r) {
+  const names = DATA.routes.length ? DATA.routes : Object.keys(r || {});
+  const rows = names.map(n => [n, +(r || {})[n] || 0]).sort((a, b) => b[1] - a[1]), max = Math.max(1, ...rows.map(x => x[1])), total = sum(r);
+  return `<ul class="bars">${rows.map(([n, v]) => `<li title="${esc(n)}: ${n0(v)} units (${pct(v, total)})"><span class="bn">${esc(n)}</span><span class="bt"><span style="width:${(100 * v / max).toFixed(1)}%"></span></span><b>${n0(v)}</b></li>`).join("")}</ul>`;
+}
+function skuTable(skus, limit) {
+  const show = limit ? skus.slice(0, limit) : skus;
+  return `<table class="skus">${show.map(s => `<tr><td class="sku">${esc(s.sku)}</td><td>${esc(s.description || "")}</td><td class="q">×${esc(s.qty)}</td></tr>`).join("")}</table>
+    ${skus.length > show.length ? `<div class="tip-more">+ ${skus.length - show.length} more SKUs</div>` : ""}`;
+}
+const KIND = { cage: "Inbound cage", pallet: "Despatch pallet", bench: "Pack bench", stock: "Storage pallet", garment: "Hanging garment" };
+const owner = r => r.type === "dropship" ? r.vendor || "Dropship" : r.type === "jobber" ? "Jobber (grade C)" : "Consumables";
+const stockUnits = r => r.totes ? r.totes.reduce((a, t) => a + t.lines.reduce((b, l) => b + (+l.qty || 0), 0), 0) : (r.lines || []).reduce((a, l) => a + (+l.qty || 0), 0);
+function head(h, closable) {
+  const r = h.rec, id = h.kind === "bench" ? "Bench " + r.bench : (r.id || "No ID");
+  return `<div class="tip-h"><span class="tip-k">${KIND[h.kind]}</span><b>${esc(id)}</b>${closable ? `<button class="x" aria-label="Close" data-close>×</button>` : ""}</div>`;
+}
+const dl = rows => `<dl>${rows.filter(([, v]) => v != null && v !== "").map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
+function compactHTML(h) {
+  const r = h.rec;
+  if (h.kind === "stock") return head(h) + dl([[r.type === "dropship" ? "Vendor" : "Stock", owner(r)], ["Location", r.location], [r.totes ? "Totes" : "Units", r.totes ? r.totes.length : n0(stockUnits(r))]]) + `<div class="tip-hint">Click for totes and SKUs</div>`;
+  if (h.kind === "garment") return head(h) + dl([["SKU", r.sku], ["Location", r.location], ["Stock", owner(r)]]) + `<div class="tip-hint">Click for details</div>`;
+  const rows = h.kind === "cage" ? [["From", r.origin], ["Delivered", fmtTime(r.deliveredAt)]]
+    : h.kind === "pallet" ? [["Route", r.route || r.destination], ["Lane", r.lane]]
+    : r.missing ? [["Output", "No data"]] : [["Today", n0(r.units) + " units"], ["Status", r.status]];
+  return head(h) + dl(rows) + `<div class="tip-hint">Click for ${h.kind === "bench" ? "output" : "SKUs and details"}</div>`;
+}
+function fullHTML(h) {
+  const r = h.rec, skus = Array.isArray(r.skus) ? r.skus : [], units = skus.reduce((a, s) => a + (+s.qty || 0), 0);
+  if (h.kind === "bench") {
+    if (r.missing) return head(h, true) + `<p class="tip-hint">No output data for this bench.</p>`;
+    return head(h, true) + dl([["Chute", r.chute], ["Operator", r.operator], ["Status", r.status], ["Units today", n0(r.units)], ["Units per hour", r.unitsPerHour], ["Last item", r.lastItemAt ? fmtTime(r.lastItemAt) : null]])
+      + `<div class="tip-s">By grade</div>${gradeBlock(r.grades || {})}<div class="tip-s">By despatch route</div>${routeBlock(r.routes)}`;
+  }
+  if (h.kind === "garment") return head(h, true) + dl([["SKU", r.sku], ["Item", r.description], ["Stock", owner(r)], ["Category", r.category], ["Location", r.location], ["Delivered", fmtTime(r.deliveredAt)], ["Scanned in", fmtTime(r.scannedAt)]]);
+  if (h.kind === "stock") {
+    const lines = r.totes ? r.totes.flatMap(t => t.lines.map(l => ({ ...l, tote: t.id }))) : (r.lines || []);
+    return head(h, true) + dl([[r.type === "dropship" ? "Vendor" : "Stock", owner(r)], ["Location", r.location], ["Delivered", fmtTime(r.deliveredAt)], ["Scanned in", fmtTime(r.scannedAt)], ["Totes", r.totes ? r.totes.length + " (" + (r.toteColour || "") + ")" : null]])
+      + `<div class="tip-s">${lines.length} SKU line${lines.length === 1 ? "" : "s"} · ${n0(stockUnits(r))} ${r.type === "consumables" ? "cases" : "units"}</div>
+      <table class="skus">${lines.map(l => `<tr>${l.tote ? `<td class="sku">${esc(l.tote)}</td>` : ""}<td class="sku">${esc(l.sku)}</td><td>${esc(l.description || "")}</td><td class="q">×${esc(l.qty)}</td></tr>`).join("")}</table>`;
+  }
+  const rows = h.kind === "cage"
+    ? [["From", r.origin], ["Delivered", fmtTime(r.deliveredAt)], ["Trailer", r.trailer], ["Door", r.door != null ? "D" + r.door : null]]
+    : [["Route", r.route || r.destination], ["Lane", r.lane], ["Built", fmtTime(r.builtAt)], ["Packed at", r.packedAt], ["Totes", r.totes]];
+  return head(h, true) + dl(rows) + `<div class="tip-s">${skus.length} SKU${skus.length === 1 ? "" : "s"} · ${n0(units)} units</div>` + skuTable(skus);
+}
+
+function pickAt(cx, cy) {
+  if (!hitMesh) return -1;
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  for (const hit of ray.intersectObject(hitMesh, false)) { const h = hoverables[hit.instanceId]; if (current === "all" || current === h.zone) return hit.instanceId; }
+  return -1;
+}
+const ground = new T.Plane(new T.Vector3(0, 1, 0), 0), _g = new T.Vector3();
+function zoneAt(cx, cy) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  if (!ray.ray.intersectPlane(ground, _g)) return null;
+  world.worldToLocal(_g);
+  for (const z of ZONES) for (const r of rects[z.id]) if (_g.x >= r.x0 && _g.x <= r.x1 && _g.z >= r.z0 && _g.z <= r.z1) return z.id;
+  return null;
+}
+function setHover(i, cx, cy) {
+  if (i !== hovered) {
+    if (hovered >= 0 && hovered !== selected) setLift(hovered, 0);
+    hovered = i;
+    if (i >= 0) {
+      if (i !== selected) setLift(i, LIFT_HOVER);
+      tip.innerHTML = compactHTML(hoverables[i]); tip.hidden = i === selected;
+      renderer.domElement.style.cursor = "pointer";
+    } else { tip.hidden = true; hoverBox.visible = false; renderer.domElement.style.cursor = ""; }
+    invalidate();
+  }
+  if (i >= 0 && !tip.hidden) {
+    const sr = viewport.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    let x = cx - sr.left + 16, y = cy - sr.top + 16;
+    if (x + tw > sr.width - 8) x = cx - sr.left - tw - 16;
+    if (y + th > sr.height - 8) y = Math.max(8, sr.height - th - 8);
+    tip.style.transform = `translate(${Math.max(8, x)}px, ${y}px)`;
+  }
+}
+function openCard(i) {
+  if (selected >= 0 && selected !== i) setLift(selected, 0);
+  selected = i; tip.hidden = true;
+  setLift(i, LIFT_OPEN);
+  card.innerHTML = fullHTML(hoverables[i]); card.hidden = false; card.scrollTop = 0;
+  invalidate();
+}
+function closeCard() {
+  if (selected < 0) return;
+  setLift(selected, selected === hovered ? LIFT_HOVER : 0);
+  selected = -1; card.hidden = true; selBox.visible = false; invalidate();
+}
+function hideTip() { setHover(-1); closeCard(); }
+card.addEventListener("click", e => { if (e.target.closest("[data-close]")) closeCard(); });
+const _a = new T.Vector3();
+function placeCard() {
+  if (hovered >= 0) frameBox(hoverBox, hovered, 0.06);
+  if (selected < 0) return;
+  frameBox(selBox, selected, 0.1);
+  const h = hoverables[selected];
+  const l = liftOf(selected);
+  _a.set(h.x, h.y + h.h / 2 + (h.slide ? 0 : l), h.z + (h.slide ? l * h.slide : 0)); world.localToWorld(_a); _a.project(camera);
+  const w = viewport.clientWidth, ht = viewport.clientHeight, cw = card.offsetWidth, ch = card.offsetHeight;
+  const px = (_a.x + 1) / 2 * w, py = (1 - _a.y) / 2 * ht;
+  let x = px + 24; if (x + cw > w - 8) x = px - cw - 24;
+  const y = Math.min(Math.max(8, py - 40), Math.max(8, ht - ch - 8));
+  card.style.transform = `translate(${Math.max(8, Math.min(x, w - cw - 8))}px, ${y}px)`;
+}
+
+let pending = null;
+renderer.domElement.addEventListener("pointermove", e => {
+  if (e.pointerType !== "mouse") return;
+  if (!e.buttons) pending = [e.clientX, e.clientY];
+  const r = renderer.domElement.getBoundingClientRect();
+  par.tx = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1));
+  par.ty = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height) * 2 - 1));
+  invalidate();
+});
+renderer.domElement.addEventListener("pointerleave", () => { pending = null; setHover(-1); setHoverZone(null); par.tx = par.ty = 0; invalidate(); });
+let downAt = null;
+renderer.domElement.addEventListener("pointerdown", e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener("pointerup", e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) return;
+  const i = pickAt(e.clientX, e.clientY);
+  if (i >= 0 && i !== selected) return openCard(i);
+  closeCard();
+  // Clicking the floor of another area opens that section
+  const zid = i < 0 ? zoneAt(e.clientX, e.clientY) : null;
+  if (zid && zid !== current) setFocus(zid);
+});
+controls.addEventListener("start", () => setHover(-1));
+
+function applyTheme() {
+  // Dark mode reads its navy tones as screen colours (sRGB) so they stay deep after lighting.
+  const col = n => { const c = new T.Color(css(n)); return isDark() ? c.convertSRGBToLinear().multiplyScalar(1.6) : c; };
+  scene.background = col("--scene");
+  greyCol.copy(col("--dim"));
+  if (shell) { shell.floorMat.color.copy(col("--floor")); shell.wallMat.color.copy(col("--wall")); }
+  if (shell) recolour();
+  dispatchEvent(new CustomEvent("asc-map-theme"));
+  const dark = isDark();
+  const b = document.getElementById("btn-theme");
+  b.textContent = dark ? "Light mode" : "Dark mode"; b.setAttribute("aria-label", dark ? "Switch to light mode" : "Switch to dark mode");
+  invalidate();
+}
+function resize() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h);
+  inset = hudInsets();
+  offTo = { x: (inset.r - inset.l) / 2, y: inset.b / 2 };
+  if (!animOff) offCur = { ...offTo };          // during a section change the offset glides with the camera instead
+  applyOffset();
+  moveNavInd(); invalidate();
+}
+/* The screen-space shift that centres the view in the free area between the panels. */
+let offCur = { x: 0, y: 0 }, offTo = { x: 0, y: 0 }, animOff = false;
+function applyOffset() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  if (offCur.x || offCur.y) camera.setViewOffset(w, h, offCur.x, offCur.y, w, h); else camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+}
+
+/* ---------- Start ---------- */
+renderSections();
+requestAnimationFrame(() => {
+  shell = build();
+  makeLabels();
+  renderDock();
+  hoverables.forEach((h, i) => { if (h.kind === "stock" || h.kind === "garment") HOVER_BY_REF.set(h.rec.id, i); });
+  panel.addEventListener("click", e => {
+    const k = e.target.closest(".cbox, .scard"); if (!k) return;
+    const part = e.target.closest(".cols span, ul.bars li, .seg-bar span");
+    if (part) selectPart(k, part); else replay(k);
+  });
+  resize();
+  applyTheme();
+  const start = location.hash.slice(1);
+  setFocus(Z[start] ? start : "all", true);
+  document.getElementById("loading").hidden = true;
+  Object.assign(window.ASC_MAP, { ready: true, current: () => current });
+  dispatchEvent(new CustomEvent("asc-map-ready"));
+  const animate = CV.animateBelts && !reduceMotion && ticks.length;
+  let last = performance.now();
+  renderer.setAnimationLoop(now => {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (tween) {
+      tween.t = Math.min(1, tween.t + dt / 0.9);
+      const k = tween.t < 0.5 ? 4 * tween.t ** 3 : 1 - (-2 * tween.t + 2) ** 3 / 2;
+      base.pos.lerpVectors(tween.p0, tween.p1, k); base.target.lerpVectors(tween.t0, tween.t1, k);
+      offCur = { x: tween.o0.x + (offTo.x - tween.o0.x) * k, y: tween.o0.y + (offTo.y - tween.o0.y) * k }; applyOffset();
+      if (tween.t >= 1) { tween = null; setTimeout(expandWide, 60); }
+      applyCam(); dirty = true;
+    }
+    if (freeCam) controls.update();                     // fires "change" while damping settles
+    else if (Math.abs(par.tx - par.x) > 1e-4 || Math.abs(par.ty - par.y) > 1e-4) {
+      const k = reduceMotion ? 1 : Math.min(1, dt * 3);
+      par.x += (par.tx - par.x) * k; par.y += (par.ty - par.y) * k;
+      applyCam(); dirty = true;
+    }
+    if (pending) {
+      const [x, y] = pending; pending = null;
+      const i = pickAt(x, y); setHover(i, x, y);
+      const zid = i >= 0 ? hoverables[i].zone : zoneAt(x, y);
+      setHoverZone(zid);
+      if (i < 0) renderer.domElement.style.cursor = zid && zid !== current ? "pointer" : "";
+    }
+    if (lifts.size && stepLifts(dt)) dirty = true;
+    if (animate) { ticks.forEach(f => f(dt)); dirty = true; }
+    if (!dirty) return;
+    dirty = false;
+    placeCard();
+    renderer.render(scene, camera);
+    placeLabels();
+  });
+});
+new ResizeObserver(() => { resize(); }).observe(viewport);
+if (document.fonts) document.fonts.ready.then(() => { resize(); if (shell) flyTo(current === "all" ? ALL : Z[current].box, true); });
+/* Light / dark toggle. Follows the system until the viewer picks one; the pick is remembered on this device. */
+const darkMQ = matchMedia("(prefers-color-scheme: dark)");
+const isDark = () => { const t = document.documentElement.dataset.theme; return t ? t === "dark" : darkMQ.matches; };
+try { const saved = localStorage.getItem("asc-map-theme"); if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved; } catch (e) {}
+darkMQ.addEventListener("change", applyTheme);
+document.getElementById("btn-theme").addEventListener("click", () => {
+  const next = isDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("asc-map-theme", next); } catch (e) {}
+  applyTheme();
+});
+applyTheme();
+document.getElementById("btn-reset").addEventListener("click", () => flyTo(current === "all" ? ALL : Z[current].box));
+document.getElementById("btn-free").addEventListener("click", e => {
+  freeCam = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  e.currentTarget.setAttribute("aria-pressed", String(freeCam));
+  controls.enabled = freeCam;
+  if (freeCam) { controls.target.copy(base.target); controls.update(); }
+  else { base.pos.copy(camera.position); base.target.copy(controls.target); par.x = par.y = 0; flyTo(current === "all" ? ALL : Z[current].box); }
+  invalidate();
+});
+document.getElementById("btn-labels").addEventListener("click", e => {
+  const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+  e.currentTarget.setAttribute("aria-pressed", String(on)); labelsEl.hidden = !on; invalidate();
+});
+addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest("input, textarea")) return;
+  if (e.key === "Escape") return hideTip();
+  if (e.key === "0") setFocus("all");
+  const z = ZONES.find(z => z.key === e.key); if (z) setFocus(z.id);
+});
+window.ASC_MAP = { setFocus, zones: ZONES, rects, scene, camera, controls, renderer, hoverables, invalidate, world, sun, all: ALL, flyTo, size: { BW, BD }, doorZ, doorsIn, doors: D, css };
+})();
