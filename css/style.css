@@ -117,7 +117,8 @@ h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing
 .app.wide .rail.right { width: calc(75% - var(--gap)); }
 .dock { transition: transform .5s cubic-bezier(.2, .8, .2, 1), opacity .35s; }
 .app.wide .dock { transform: translateY(calc(100% + 2 * var(--gap))); opacity: 0; pointer-events: none; }
-.app.wide .detail { padding: 20px 24px 26px; gap: 18px; background: var(--glass-strong); }
+.app.wide .detail { padding: 20px 24px 26px; gap: 18px; background: var(--glass-strong); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.app.wide .rail.right .toolbar { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--glass-strong); }
 .sp-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; }
 .sp-head .blurb { max-width: 70ch; }
 .sp-head .notes { text-align: right; max-width: 28ch; }

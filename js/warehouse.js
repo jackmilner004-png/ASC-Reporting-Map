@@ -793,13 +793,20 @@ const ALL = { x0: -BW / 2, x1: BW / 2, z0: -BD / 2, z1: BD / 2 };
 /* The glass panels cover the edges of the canvas, so framing uses the free area between them. */
 let inset = { l: 0, r: 0, b: 0 };
 const WIDE = new Set(["storage", "hangstore"]);       // sections whose detail panel opens wide
+let pendingWide = null;
+function expandWide() {
+  if (!pendingWide || pendingWide !== current) return;
+  pendingWide = null;
+  document.querySelector(".app").classList.add("wide");
+  renderPanel();
+}
 function hudInsets() {
   const dk = document.getElementById("dock");
   if (!dk || getComputedStyle(dk).position !== "absolute") return { l: 0, r: 0, b: 0 };
   // Measured from layout sizes, not live rectangles, so a panel mid-transition can't skew the framing.
   // The wide stock panel slides over the view, so those sections are framed as usual (zoomed in).
   const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), gap = 16;
-  return { l: Math.max(0, L.right - st.left), r: parseFloat(css("--right-w")) + 2 * gap, b: WIDE.has(current) ? 0 : dk.offsetHeight + gap };
+  return { l: Math.max(0, L.right - st.left), r: parseFloat(css("--right-w")) + 2 * gap, b: dk.offsetHeight + gap };
 }
 function viewFor(b) {
   const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, sx = b.x1 - b.x0, sz = b.z1 - b.z0;
@@ -837,12 +844,15 @@ function flyTo(b, instant) {
 let current = "all", greyCol = new T.Color(), shell;
 function setFocus(id, instant) {
   current = id;
-  document.querySelector(".app").classList.toggle("wide", WIDE.has(id));
+  // Storage sections: zoom in first, then the wide panel expands (see expandWide)
+  document.querySelector(".app").classList.remove("wide");
+  pendingWide = WIDE.has(id) ? id : null;
   resize();
   recolour();
   dispatchEvent(new CustomEvent("asc-map-focus", { detail: id }));
   hideTip();
   flyTo(id === "all" ? ALL : Z[id].box, instant);
+  if (pendingWide && (instant || reduceMotion)) expandWide();
   document.querySelectorAll("#sections button").forEach(b => { const on = b.dataset.id === id; b.setAttribute("aria-pressed", String(on)); if (on && !instant) b.scrollIntoView({ block: "nearest", inline: "nearest" }); });
   renderPanel();
   moveNavInd();
@@ -901,7 +911,7 @@ function renderPanel() {
       <div><h3>Headline counts</h3><div class="stats">${totals.map(([l, v]) => `<div class="stat"><b data-count="${v}">${v}</b><span>${l}</span></div>`).join("")}</div></div>
       <p class="notes">Pick a section on the left, or a card along the bottom. Hover or click a cage, pallet or pack bench for its details. Hover an area to light it up, click it to open that section. Keys 0–7 also switch section. Turn on Orbit to rotate, zoom and pan freely.</p>
       <p class="notes">Doors ${doorsIn > 1 ? "1–" + doorsIn : "1"} are shown as inbound and the rest as despatch. That split is a guess. All counts live in <code>js/layout-config.js</code>.</p>${dataNote}`;
-  } else if (WIDE.has(current)) {
+  } else if (WIDE.has(current) && document.querySelector(".app").classList.contains("wide")) {
     panel.innerHTML = stockPanelHTML(current);
     wireStockPanel(current);
   } else {
@@ -1013,9 +1023,9 @@ function stockPanelHTML(kind) {
       <button class="btn more" id="sp-more" hidden>Show more</button>
     </div>`;
 }
-const tableState = {};
+const tableState = {}, PREVIEW_ROWS = 12;   // the table shows a preview until it is expanded
 function wireStockPanel(kind) {
-  const m = stockModel(kind), st = tableState[kind] = tableState[kind] || { q: "", t: "all", k: "loc", dir: 1, limit: 150 };
+  const m = stockModel(kind), st = tableState[kind] = tableState[kind] || { q: "", t: "all", k: "loc", dir: 1, limit: 150, open: false };
   const body = panel.querySelector("#sp-body"), q = panel.querySelector("#sp-q"), more = panel.querySelector("#sp-more"), count = panel.querySelector("#sp-count");
   q.value = st.q;
   panel.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.t === st.t)));
@@ -1023,17 +1033,18 @@ function wireStockPanel(kind) {
     const needle = st.q.trim().toLowerCase();
     let rows = m.rows.filter(r => (st.t === "all" || r.type === st.t) && (!needle || `${r.sku} ${r.desc} ${r.owner} ${r.tote} ${r.pallet} ${r.loc}`.toLowerCase().includes(needle)));
     const k = st.k; rows = rows.slice().sort((a, b) => (k === "qty" ? a[k] - b[k] : String(a[k]).localeCompare(String(b[k]))) * st.dir);
-    const shown = rows.slice(0, st.limit);
+    const shown = rows.slice(0, st.open ? st.limit : PREVIEW_ROWS);
     body.innerHTML = shown.map(r => `<tr data-ref="${esc(r.ref)}" tabindex="0"><td class="mono">${esc(r.sku)}</td><td>${esc(r.desc)}</td><td class="num">${n0(r.qty)}</td><td><span class="own" style="--c:${STOCK_COL[r.type]}"></span>${esc(r.owner)}</td>${m.hasTote ? `<td class="mono">${esc(r.tote || "–")}</td>` : ""}<td class="mono">${esc(r.pallet)}</td><td class="mono">${esc(r.loc)}</td><td>${esc(fmtShort(r.delivered))}</td><td>${esc(fmtShort(r.scanned))}</td></tr>`).join("")
       || `<tr><td colspan="9" class="empty">No stock matches.</td></tr>`;
     count.textContent = `${n0(shown.length)} of ${n0(rows.length)} lines`;
-    more.hidden = rows.length <= st.limit;
+    more.hidden = rows.length <= (st.open ? st.limit : PREVIEW_ROWS);
+    more.textContent = st.open ? "Show 300 more" : `Expand table (${n0(rows.length)} lines)`;
     panel.querySelectorAll("th").forEach(th => th.setAttribute("aria-sort", th.dataset.k === st.k ? (st.dir > 0 ? "ascending" : "descending") : "none"));
   };
   q.addEventListener("input", () => { st.q = q.value; st.limit = 150; draw(); });
   panel.querySelector(".chips").addEventListener("click", e => { const c = e.target.closest(".chip"); if (!c) return; st.t = c.dataset.t; st.limit = 150; panel.querySelectorAll(".chip").forEach(x => x.setAttribute("aria-pressed", String(x === c))); draw(); });
   panel.querySelector("thead").addEventListener("click", e => { const th = e.target.closest("th"); if (!th) return; st.dir = st.k === th.dataset.k ? -st.dir : 1; st.k = th.dataset.k; draw(); });
-  more.addEventListener("click", () => { st.limit += 300; draw(); });
+  more.addEventListener("click", () => { if (st.open) st.limit += 300; else st.open = true; draw(); });
   const openRef = tr => { const i = HOVER_BY_REF.get(tr.dataset.ref); if (i != null) openCard(i); };
   body.addEventListener("click", e => { const tr = e.target.closest("tr[data-ref]"); if (tr) openRef(tr); });
   body.addEventListener("keydown", e => { const tr = e.target.closest("tr[data-ref]"); if (tr && e.key === "Enter") openRef(tr); });
@@ -1380,7 +1391,7 @@ requestAnimationFrame(() => {
       tween.t = Math.min(1, tween.t + dt / 0.9);
       const k = tween.t < 0.5 ? 4 * tween.t ** 3 : 1 - (-2 * tween.t + 2) ** 3 / 2;
       base.pos.lerpVectors(tween.p0, tween.p1, k); base.target.lerpVectors(tween.t0, tween.t1, k);
-      if (tween.t >= 1) tween = null;
+      if (tween.t >= 1) { tween = null; setTimeout(expandWide, 60); }
       applyCam(); dirty = true;
     }
     if (freeCam) controls.update();                     // fires "change" while damping settles
