@@ -807,7 +807,9 @@ function hudInsets() {
   // Storage sections frame their area in the space left of the half-width pop-out, above the stock cards.
   const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), gap = 16;
   const l = Math.max(0, L.right - st.left);
-  if (WIDE.has(current)) return { l, r: Math.round(viewport.clientWidth / 2) + gap, b: sd.offsetHeight + gap };
+  // Hanging storage frames its area left of the half-width pop-out; Storage zooms in as usual and the pop-out covers it.
+  if (current === "hangstore") return { l, r: Math.round(viewport.clientWidth / 2) + gap, b: sd.offsetHeight + gap };
+  if (current === "storage") return { l, r: parseFloat(css("--right-w")) + 2 * gap, b: sd.offsetHeight + gap };
   return { l, r: parseFloat(css("--right-w")) + 2 * gap, b: dk.offsetHeight + gap };
 }
 function viewFor(b) {
@@ -1054,7 +1056,7 @@ function wireStockPanel(kind) {
     let rows = m.rows.filter(r => (st.t === "all" || r.type === st.t) && (!needle || `${r.sku} ${r.desc} ${r.owner} ${r.tote} ${r.pallet} ${r.loc}`.toLowerCase().includes(needle)));
     const k = st.k; rows = rows.slice().sort((a, b) => (k === "qty" ? a[k] - b[k] : String(a[k]).localeCompare(String(b[k]))) * st.dir);
     const shown = rows.slice(0, st.open ? st.limit : PREVIEW_ROWS);
-    body.innerHTML = shown.map(r => `<tr data-ref="${esc(r.ref)}" tabindex="0"><td class="mono">${esc(r.sku)}</td><td>${esc(r.desc)}</td><td class="num">${n0(r.qty)}</td><td><span class="own" style="--c:${STOCK_COL[r.type]}"></span>${esc(r.owner)}</td>${m.hasTote ? `<td class="mono">${esc(r.tote || "–")}</td>` : ""}<td class="mono">${esc(r.pallet)}</td><td class="mono">${esc(r.loc)}</td><td>${esc(fmtShort(r.delivered))}</td><td>${esc(fmtShort(r.scanned))}</td></tr>`).join("")
+    body.innerHTML = shown.map(r => `<tr data-ref="${esc(r.ref)}" tabindex="0"><td class="mono">${esc(r.sku)}</td><td title="${esc(r.desc)}">${esc(r.desc)}</td><td class="num">${n0(r.qty)}</td><td><span class="own" style="--c:${STOCK_COL[r.type]}"></span>${esc(r.owner)}</td>${m.hasTote ? `<td class="mono">${esc(r.tote || "–")}</td>` : ""}<td class="mono">${esc(r.pallet)}</td><td class="mono">${esc(r.loc)}</td><td>${esc(fmtShort(r.delivered))}</td><td>${esc(fmtShort(r.scanned))}</td></tr>`).join("")
       || `<tr><td colspan="9" class="empty">No stock matches.</td></tr>`;
     count.textContent = `${n0(shown.length)} of ${n0(rows.length)} lines`;
     more.hidden = rows.length <= (st.open ? st.limit : PREVIEW_ROWS);
