@@ -840,7 +840,7 @@ function flyTo(b, instant) {
   const v = viewFor(b);
   if (freeCam) { base.pos.copy(camera.position); base.target.copy(controls.target); }
   if (instant || reduceMotion) { base.pos.copy(v.pos); base.target.copy(v.target); tween = null; applyCam(); invalidate(); return; }
-  tween = { t: 0, p0: base.pos.clone(), t0: base.target.clone(), p1: v.pos, t1: v.target };
+  tween = { t: 0, p0: base.pos.clone(), t0: base.target.clone(), p1: v.pos, t1: v.target, o0: { ...offCur } };
   invalidate();
 }
 
@@ -855,11 +855,14 @@ function setFocus(id, instant) {
   // Storage sections swap the bottom cards for their stockholding cards (left of the pop-out)
   app.classList.toggle("stockmode", WIDE.has(id));
   if (WIDE.has(id)) renderStockDock(id);
+  animOff = !instant && !reduceMotion;
   resize();
   recolour();
   dispatchEvent(new CustomEvent("asc-map-focus", { detail: id }));
   hideTip();
   flyTo(id === "all" ? ALL : Z[id].box, instant);
+  if (!animOff) { offCur = { ...offTo }; applyOffset(); }
+  animOff = false;
   if (pendingWide && (instant || reduceMotion)) expandWide();
   document.querySelectorAll("#sections button").forEach(b => { const on = b.dataset.id === id; b.setAttribute("aria-pressed", String(on)); if (on && !instant) b.scrollIntoView({ block: "nearest", inline: "nearest" }); });
   renderPanel();
@@ -1390,8 +1393,17 @@ function resize() {
   const w = viewport.clientWidth, h = viewport.clientHeight;
   renderer.setSize(w, h, false); camera.aspect = w / Math.max(1, h);
   inset = hudInsets();
-  if (inset.l || inset.r || inset.b) camera.setViewOffset(w, h, (inset.r - inset.l) / 2, inset.b / 2, w, h); else camera.clearViewOffset();
-  camera.updateProjectionMatrix(); moveNavInd(); invalidate();
+  offTo = { x: (inset.r - inset.l) / 2, y: inset.b / 2 };
+  if (!animOff) offCur = { ...offTo };          // during a section change the offset glides with the camera instead
+  applyOffset();
+  moveNavInd(); invalidate();
+}
+/* The screen-space shift that centres the view in the free area between the panels. */
+let offCur = { x: 0, y: 0 }, offTo = { x: 0, y: 0 }, animOff = false;
+function applyOffset() {
+  const w = viewport.clientWidth, h = viewport.clientHeight;
+  if (offCur.x || offCur.y) camera.setViewOffset(w, h, offCur.x, offCur.y, w, h); else camera.clearViewOffset();
+  camera.updateProjectionMatrix();
 }
 
 /* ---------- Start ---------- */
@@ -1421,6 +1433,7 @@ requestAnimationFrame(() => {
       tween.t = Math.min(1, tween.t + dt / 0.9);
       const k = tween.t < 0.5 ? 4 * tween.t ** 3 : 1 - (-2 * tween.t + 2) ** 3 / 2;
       base.pos.lerpVectors(tween.p0, tween.p1, k); base.target.lerpVectors(tween.t0, tween.t1, k);
+      offCur = { x: tween.o0.x + (offTo.x - tween.o0.x) * k, y: tween.o0.y + (offTo.y - tween.o0.y) * k }; applyOffset();
       if (tween.t >= 1) { tween = null; setTimeout(expandWide, 60); }
       applyCam(); dirty = true;
     }
