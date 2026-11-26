@@ -795,10 +795,11 @@ let inset = { l: 0, r: 0, b: 0 };
 const WIDE = new Set(["storage", "hangstore"]);       // sections whose detail panel opens wide
 function hudInsets() {
   const dk = document.getElementById("dock");
-  if (dk && getComputedStyle(dk).position === "absolute" && WIDE.has(current)) return { l: 0, r: Math.round(viewport.clientWidth * 0.75) + 16, b: 0 };
   if (!dk || getComputedStyle(dk).position !== "absolute") return { l: 0, r: 0, b: 0 };
-  const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), Rr = document.getElementById("rail-right").getBoundingClientRect();
-  return { l: Math.max(0, L.right - st.left), r: Math.max(0, st.right - Rr.left), b: Math.max(0, st.bottom - dk.getBoundingClientRect().top) };
+  // Measured from layout sizes, not live rectangles, so a panel mid-transition can't skew the framing.
+  // The wide stock panel slides over the view, so those sections are framed as usual (zoomed in).
+  const st = viewport.getBoundingClientRect(), L = document.getElementById("rail").getBoundingClientRect(), gap = 16;
+  return { l: Math.max(0, L.right - st.left), r: parseFloat(css("--right-w")) + 2 * gap, b: WIDE.has(current) ? 0 : dk.offsetHeight + gap };
 }
 function viewFor(b) {
   const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2, sx = b.x1 - b.x0, sz = b.z1 - b.z0;
@@ -1002,7 +1003,7 @@ function stockPanelHTML(kind) {
     <div class="sp-head"><div><div class="kicker"><span class="swatch" style="background:${z.color};color:${z.color}"></span>Section</div><h2>${z.name}</h2><p class="blurb">${ZONE_TEXT[kind]}</p></div>
       <p class="notes">${esc(DATA.source || "Sample data")}${DATA.stock.asOf ? `, as of ${esc(fmtTime(DATA.stock.asOf))}` : ""}. From <code>js/sample-stock.js</code>.</p></div>
     <div class="sp-cards">${m.cards.map(card).join("")}</div>
-    <div class="sp-charts">${m.charts.map(c => `<div class="cbox${c.wide ? " wide" : ""}" style="--c:${z.color}"><h3>${c.title}</h3><div class="${c.scroll ? "scroll" : ""}">${c.body}</div></div>`).join("")}</div>
+    <div class="sp-charts">${m.charts.map(c => `<div class="cbox${c.wide ? " wide" : ""}" style="--c:${z.color}"><h3>${c.title}</h3><div class="${/class="cols/.test(c.body) ? "" : "scroll"}">${c.body}</div></div>`).join("")}</div>
     <div class="sp-table">
       <div class="sp-tools"><h3>Stock detail</h3>
         <input type="search" id="sp-q" placeholder="Search SKU, item, ID, location or vendor" aria-label="Search stock">

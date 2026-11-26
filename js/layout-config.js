@@ -12,7 +12,7 @@
      east: hanging storage to the north, manual processing below it.
    ========================================================================= */
 window.ASC_LAYOUT = {
-  site: { name: "ASC returns centre", wallHeight: 8, outdoor: true },   // outdoor: DRAFT yard/trailers/trees (js/outdoor.js)
+  site: { name: "ASC returns centre", wallHeight: 8, outdoor: false },   // outdoor: yard/trailers/trees (js/outdoor.js). false = off at start; the Yard button turns it on
 
   bayDoors: {
     count: 6,
